@@ -1,0 +1,59 @@
+{
+  "name": "sentinel-dvpn-client",
+  "version": "1.0.0",
+  "description": "Sentinel dVPN Desktop Client",
+  "productName": "sentinel-dvpn-client",
+  "main": "out/main/index.js",
+  "author": "Tkd-Alex <alex.tkd.alex@gmail.com>",
+  "homepage": "https://tkd-alex.github.io/sentinel-dvpn-client",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "start": "electron .",
+    "dist:linux": "npm run build && electron-builder --linux",
+    "dist:win": "npm run build && electron-builder --win",
+    "dist:mac": "npm run build && electron-builder --mac",
+    "dist:all": "npm run build && electron-builder --linux --win --mac"
+  },
+  "dependencies": {
+    "@cosmjs/proto-signing": "^0.32.4",
+    "@cosmjs/stargate": "^0.32.4",
+    "@electron-toolkit/preload": "^3.0.1",
+    "@electron-toolkit/utils": "^3.0.0",
+    "@sentinel-official/sentinel-js-sdk": "^2.0.4",
+    "d3": "^7.9.0",
+    "d3-geo": "^3.1.1",
+    "electron-store": "^8.2.0",
+    "i18next": "^26.0.4",
+    "i18next-browser-languagedetector": "^8.2.1",
+    "long": "^5.2.3",
+    "qrcode": "^1.5.4",
+    "react-i18next": "^17.0.2",
+    "topojson-client": "^3.1.0",
+    "uuid": "^13.0.0",
+    "world-atlas": "^2.0.2"
+  },
+  "overrides": {
+    "@scure/base": "1.1.6"
+  },
+  "devDependencies": {
+    "@types/d3": "^7.4.3",
+    "@types/d3-geo": "^3.1.0",
+    "@types/long": "^5.0.0",
+    "@types/node": "^20.14.10",
+    "@types/qrcode": "^1.5.5",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@types/topojson-client": "^3.1.5",
+    "@types/uuid": "^10.0.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3",
+    "electron-vite": "^2.3.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.5.2",
+    "vite": "^5.3.1"
+  }
+}
