@@ -19,12 +19,19 @@
         <div class="logo-sub">DECENTRALIZED NODE NETWORK</div>
       </div>
     </div>
-    <nav class="nav-links">
-      <a href="#features" class="nav-link">Features</a>
-      <a href="#protocol" class="nav-link">Protocol</a>
-      <a href="#validator" class="nav-link">Validator</a>
-      <a href="https://github.com/Tkd-Alex/sentinel-dvpn-client" class="btn btn-sm btn-secondary">GitHub</a>
-    </nav>
+    <div class="nav-container">
+      <button class="menu-toggle" aria-label="Toggle Menu">
+        <span></span>
+        <span></span>
+        <span></span>
+      </button>
+      <nav class="nav-links">
+        <a href="#features" class="nav-link">Features</a>
+        <a href="#protocol" class="nav-link">Protocol</a>
+        <a href="#validator" class="nav-link">Validator</a>
+        <a href="https://github.com/Tkd-Alex/sentinel-dvpn-client" class="btn btn-sm btn-secondary">GitHub</a>
+      </nav>
+    </div>
   </header>
 
   <main class="content-area">
@@ -219,6 +226,22 @@
 
   <script>
     document.getElementById('year').innerText = new Date().getFullYear();
+
+    const menuToggle = document.querySelector('.menu-toggle');
+    const navLinks = document.querySelector('.nav-links');
+    const links = document.querySelectorAll('.nav-link');
+
+    menuToggle.addEventListener('click', () => {
+      menuToggle.classList.toggle('active');
+      navLinks.classList.toggle('active');
+    });
+
+    links.forEach(link => {
+      link.addEventListener('click', () => {
+        menuToggle.classList.remove('active');
+        navLinks.classList.remove('active');
+      });
+    });
 
     function copyAddr() {
       const addr = document.getElementById('sentinel-addr').innerText;

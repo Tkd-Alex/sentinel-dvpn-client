@@ -95,6 +95,32 @@ body {
 .nav-link { color: var(--text-2); text-decoration: none; font-size: 12px; text-transform: uppercase; letter-spacing: 0.1em; transition: color 0.2s; }
 .nav-link:hover { color: var(--cyan); }
 
+/* ── Hamburger Menu ──────────────────────────────── */
+.menu-toggle {
+  display: none;
+  flex-direction: column;
+  justify-content: space-between;
+  width: 24px;
+  height: 18px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  z-index: 1001;
+}
+
+.menu-toggle span {
+  display: block;
+  width: 100%;
+  height: 2px;
+  background-color: var(--cyan);
+  transition: all 0.3s ease;
+  box-shadow: var(--glow-cyan);
+}
+
+.menu-toggle.active span:nth-child(1) { transform: translateY(8px) rotate(45deg); }
+.menu-toggle.active span:nth-child(2) { opacity: 0; }
+.menu-toggle.active span:nth-child(3) { transform: translateY(-8px) rotate(-45deg); }
+
 /* ── Content Area ────────────────────────────────── */
 .hero {
   padding: 100px 5% 60px;
@@ -435,12 +461,123 @@ body {
 .footer-links { font-size: 11px; color: var(--text-3); }
 
 /* ── Responsive ────────────────────────────────────── */
+@media (max-width: 1024px) {
+  .hero { padding: 80px 5%; gap: 30px; }
+  .hero-content h1 { font-size: 48px; }
+}
+
 @media (max-width: 900px) {
-  .hero { flex-direction: column; text-align: center; padding-top: 60px; }
-  .hero-content h1 { font-size: 40px; }
+  .titlebar {
+    height: 70px;
+    padding: 0 5%;
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: center;
+  }
+  
+  .menu-toggle { display: flex; }
+
+  .nav-links {
+    position: fixed;
+    top: 70px;
+    left: 0;
+    width: 100%;
+    height: 0;
+    background: var(--bg-1);
+    flex-direction: column;
+    justify-content: flex-start;
+    padding-top: 0;
+    overflow: hidden;
+    transition: all 0.4s ease;
+    border-bottom: 0px solid var(--border);
+    backdrop-filter: blur(10px);
+    z-index: 1000;
+    gap: 0;
+  }
+
+  .nav-links.active {
+    height: auto;
+    padding: 30px 0;
+    border-bottom-width: 1px;
+  }
+
+  .nav-link {
+    width: 100%;
+    text-align: center;
+    padding: 20px;
+    font-size: 16px;
+    border-bottom: 1px solid rgba(30, 45, 69, 0.3);
+  }
+  
+  .nav-links .btn {
+    margin-top: 20px;
+    width: 80%;
+  }
+  
+  .hero { 
+    flex-direction: column; 
+    text-align: center; 
+    padding-top: 60px; 
+    min-height: auto;
+  }
+  .hero-content { max-width: 100%; }
+  .hero-content h1 { font-size: 42px; }
+  .hero-sub { font-size: 16px; }
   .hero-actions { justify-content: center; }
-  .sponsor-options { grid-template-columns: 1fr; }
-  .setup-card { width: 100%; padding: 30px 20px; }
+  .hero-platform-tags { justify-content: center; }
+  
+  .hero-image-container {
+    transform: none;
+    max-width: 80%;
+  }
+  .hero-image-container:hover { transform: scale(1.02); }
+
+  .protocol-grid { flex-direction: column; text-align: center; }
+  .protocol-text { order: 1; }
+  .protocol-visual { 
+    order: 2; 
+    flex-direction: row; 
+    justify-content: center; 
+    width: 100%;
+    margin-top: 30px;
+  }
+
+  .validator-card {
+    flex-direction: column;
+    padding: 40px 20px;
+    text-align: center;
+    align-items: center;
+  }
+  .validator-info { width: 100%; }
+  .validator-actions { justify-content: center; }
+  .donation-box { flex-direction: column; gap: 10px; }
+  .donation-addr { width: 100%; word-break: break-all; }
+
+  .setup-card { width: 100%; padding: 40px 20px; }
+  .promotion-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 600px) {
+  .hero-content h1 { font-size: 32px; }
+  .section-title { font-size: 26px; }
+  
+  .features-grid { grid-template-columns: 1fr; }
+  .gallery-grid { grid-template-columns: 1fr; }
+  
+  .comparison-grid { grid-template-columns: 1fr; }
+  .comp-head, .comp-cell { padding: 15px; font-size: 12px; }
+  
+  .hero-actions .btn { width: 100%; }
+  
+  .bottom-bar {
+    flex-direction: column;
+    gap: 15px;
+    text-align: center;
+  }
+}
+
+@media (max-width: 400px) {
+  .protocol-visual { flex-direction: column; }
 }
 
 /* ── Glitch Text Effect ───────────────────────────── */
