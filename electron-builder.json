@@ -1,0 +1,26 @@
+{
+  "appId": "co.sentinel.dvpn-client",
+  "productName": "Sentinel dVPN",
+  "copyright": "Copyright © 2026 Sentinel",
+  "directories": { "buildResources": "build" },
+  "files": ["out/**/*"],
+  "icon": "build/icon.png",
+  "linux": {
+    "target": ["deb", "AppImage", "pacman", "rpm"],
+    "category": "Network",
+    "icon": "build/icon.png"
+  },
+  "mac": {
+    "target": ["dmg"],
+    "category": "public.app-category.utilities",
+    "icon": "build/icon.png"
+  },
+  "win": {
+    "target": ["nsis"],
+    "icon": "build/icon.ico"
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true
+  }
+}
