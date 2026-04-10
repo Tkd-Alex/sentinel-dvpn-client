@@ -435,12 +435,91 @@ body {
 .footer-links { font-size: 11px; color: var(--text-3); }
 
 /* ── Responsive ────────────────────────────────────── */
+@media (max-width: 1024px) {
+  .hero { padding: 80px 5%; gap: 30px; }
+  .hero-content h1 { font-size: 48px; }
+}
+
 @media (max-width: 900px) {
-  .hero { flex-direction: column; text-align: center; padding-top: 60px; }
-  .hero-content h1 { font-size: 40px; }
+  .titlebar {
+    height: auto;
+    padding: 20px 5%;
+    flex-direction: column;
+    gap: 20px;
+    position: relative;
+  }
+  .nav-links {
+    width: 100%;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 15px;
+  }
+  
+  .hero { 
+    flex-direction: column; 
+    text-align: center; 
+    padding-top: 60px; 
+    min-height: auto;
+  }
+  .hero-content { max-width: 100%; }
+  .hero-content h1 { font-size: 42px; }
+  .hero-sub { font-size: 16px; }
   .hero-actions { justify-content: center; }
-  .sponsor-options { grid-template-columns: 1fr; }
-  .setup-card { width: 100%; padding: 30px 20px; }
+  .hero-platform-tags { justify-content: center; }
+  
+  .hero-image-container {
+    transform: none;
+    max-width: 80%;
+  }
+  .hero-image-container:hover { transform: scale(1.02); }
+
+  .protocol-grid { flex-direction: column; text-align: center; }
+  .protocol-text { order: 1; }
+  .protocol-visual { 
+    order: 2; 
+    flex-direction: row; 
+    justify-content: center; 
+    width: 100%;
+    margin-top: 30px;
+  }
+
+  .validator-card {
+    flex-direction: column;
+    padding: 40px 20px;
+    text-align: center;
+    align-items: center;
+  }
+  .validator-info { width: 100%; }
+  .validator-actions { justify-content: center; }
+  .donation-box { flex-direction: column; gap: 10px; }
+  .donation-addr { width: 100%; word-break: break-all; }
+
+  .setup-card { width: 100%; padding: 40px 20px; }
+  .promotion-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 600px) {
+  .hero-content h1 { font-size: 32px; }
+  .section-title { font-size: 26px; }
+  
+  .features-grid { grid-template-columns: 1fr; }
+  .gallery-grid { grid-template-columns: 1fr; }
+  
+  .comparison-grid { grid-template-columns: 1fr; }
+  .comp-head, .comp-cell { padding: 15px; font-size: 12px; }
+  
+  .hero-actions .btn { width: 100%; }
+  
+  .bottom-bar {
+    flex-direction: column;
+    gap: 15px;
+    text-align: center;
+  }
+}
+
+@media (max-width: 400px) {
+  .nav-links { flex-direction: column; align-items: center; }
+  .protocol-visual { flex-direction: column; }
 }
 
 /* ── Glitch Text Effect ───────────────────────────── */
