@@ -623,14 +623,14 @@ async function setupTransparentV2Ray(v2ray: V2Ray): Promise<{ success: boolean; 
         if (match) gateway = match[1]
       } catch (e) { console.warn('[Transparent] Failed to detect gateway', e) }
 
-      // 2. All-in-one privileged script for Windows
+      // 2. All-in-one privileged PowerShell script for Windows
       const setupCmds = [
         `route add ${serverIp} mask 255.255.255.255 ${gateway} METRIC 1`,
-        // Start tun2socks in background (elevated) and redirect its output to a log
-        `start /b "" "${exe}" -device ${activeTunInterface} -proxy socks5://127.0.0.1:${socksPort} > "${tunLog}" 2>&1`,
-        // Wait for wintun interface to be created
-        `timeout /t 3 /nobreak`,
-        `netsh interface ipv4 set address name="${activeTunInterface}" source=static addr=10.0.0.1 mask=255.255.255.0`,
+        // Launch tun2socks asynchronously and redirect output
+        `Start-Process -FilePath "${exe}" -ArgumentList "-device ${activeTunInterface}", "-proxy socks5://127.0.0.1:${socksPort}" -RedirectStandardOutput "${tunLog}" -RedirectStandardError "${tunLog}" -WindowStyle Hidden`,
+        // Wait loop for interface to appear
+        `for ($i=0; $i -lt 20; $i++) { if (Get-NetAdapter -Name "${activeTunInterface}" -ErrorAction SilentlyContinue) { break }; Start-Sleep -Seconds 1 }`,
+        `netsh interface ipv4 set address name="${activeTunInterface}" source=static addr=10.0.0.1 mask=255.255.255.0 gateway=none`,
         `netsh interface ipv4 set dnsservers name="${activeTunInterface}" static address=1.1.1.1 register=none validate=no`,
         `route add 0.0.0.0 mask 128.0.0.0 10.0.0.1 METRIC 5`,
         `route add 128.0.0.0 mask 128.0.0.0 10.0.0.1 METRIC 5`
