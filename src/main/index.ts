@@ -611,14 +611,27 @@ async function setupTransparentV2Ray(v2ray: V2Ray): Promise<{ success: boolean; 
       if (settings.killSwitch) applyKillSwitch(true, activeTunInterface).catch(() => {})
     } else if (plat === 'win32') {
       activeTunInterface = 'sentinel-tun'
-      execSync(`route add ${serverIp} mask 255.255.255.255 0.0.0.0 METRIC 1`, { stdio: 'ignore' })
       const binaries = checkBinaries()
       const exe = binaries.tun2socksPath || 'tun2socks.exe'
-      activeTun2Socks = spawn(exe, ['-device', activeTunInterface, '-proxy', `socks5://127.0.0.1:${socksPort}`])
-      await new Promise(r => setTimeout(r, 1000))
-      execSync(`netsh interface ipv4 set address name="${activeTunInterface}" source=static addr=10.0.0.1 mask=255.255.255.0 gateway=none`, { stdio: 'ignore' })
-      execSync(`route add 0.0.0.0 mask 128.0.0.0 10.0.0.1 METRIC 5`, { stdio: 'ignore' })
-      execSync(`route add 128.0.0.0 mask 128.0.0.0 10.0.0.1 METRIC 5`, { stdio: 'ignore' })
+
+      // Prepare all privileged commands for Windows
+      const setupCmds = [
+        `route add ${serverIp} mask 255.255.255.255 0.0.0.0 METRIC 1`,
+        `netsh interface ipv4 set address name="${activeTunInterface}" source=static addr=10.0.0.1 mask=255.255.255.0 gateway=none`,
+        `route add 0.0.0.0 mask 128.0.0.0 10.0.0.1 METRIC 5`,
+        `route add 128.0.0.0 mask 128.0.0.0 10.0.0.1 METRIC 5`
+      ]
+
+      try {
+        // Execute network setup with UAC elevation
+        execPrivileged(setupCmds)
+        // Spawn tun2socks
+        activeTun2Socks = spawn(exe, ['-device', activeTunInterface, '-proxy', `socks5://127.0.0.1:${socksPort}`])
+        await new Promise(r => setTimeout(r, 1000))
+      } catch (e: any) {
+        throw new Error(`Windows network setup failed: ${e.message}`)
+      }
+
       const settings = getSettings()
       if (settings.killSwitch) applyKillSwitch(true, activeTunInterface).catch(() => {})
     }
