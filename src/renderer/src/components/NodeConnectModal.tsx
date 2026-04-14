@@ -32,7 +32,7 @@ function UsageProgress({ session }: { session: any }) {
 }
 
 // ── ConnectedDetails: right panel when tunnel is active ────────────────────
-function ConnectedDetails({ conn, onDisconnect }: { conn: ConnectionState; onDisconnect: () => void }) {
+function ConnectedDetails({ conn, onDisconnect, platform }: { conn: ConnectionState; onDisconnect: () => void; platform?: string }) {
   const { t } = useTranslation()
   const [sys, setSys] = useState<any>(null)
   const isWg   = conn.vpnType === 'wireguard'
@@ -101,10 +101,12 @@ function ConnectedDetails({ conn, onDisconnect }: { conn: ConnectionState; onDis
         </div>
       </div>
 
-      <div className="cd-section">
-        <div className="cd-section-label">{t('node_modal.system_throughput')}</div>
-        <TrafficStatsWidget />
-      </div>
+      {platform !== 'win32' && (
+        <div className="cd-section">
+          <div className="cd-section-label">{t('node_modal.system_throughput')}</div>
+          <TrafficStatsWidget />
+        </div>
+      )}
 
       <button className="btn btn-danger btn-full" onClick={onDisconnect} style={{ marginTop: 8 }}>
         ✕ {t('node_modal.disconnect_close')}
@@ -529,6 +531,7 @@ export default function NodeConnectModal({
                         vpnType: node.type === 1 ? 'wireguard' : 'v2ray'
                       }} 
                       onDisconnect={async () => { await window.api.disconnectNode(); onClose() }} 
+                      platform={binaries?.platform}
                     />
                   </>
                 )}
@@ -681,7 +684,7 @@ export default function NodeConnectModal({
                   </>
                 )}
 
-                {conn.step === 'connected' && <ConnectedDetails conn={conn} onDisconnect={async () => { await window.api.disconnectNode(); onClose() }} />}
+                {conn.step === 'connected' && <ConnectedDetails conn={conn} onDisconnect={async () => { await window.api.disconnectNode(); onClose() }} platform={binaries?.platform} />}
                 {conn.step === 'error' && <ErrorStep error={conn.error} hasConfig={hasConfig} onRetryTunnel={handleRetryTunnel} onRetryFull={() => setConn(s => ({ ...s, step: 'choose-type', error: null }))} onClose={onClose} />}
               </>
             )}
