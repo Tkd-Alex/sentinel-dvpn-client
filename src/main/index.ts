@@ -613,7 +613,8 @@ async function setupTransparentV2Ray(v2ray: V2Ray): Promise<{ success: boolean; 
       activeTunInterface = 'sentinel-tun'
       const binaries = checkBinaries()
       const exe = binaries.tun2socksPath || 'tun2socks.exe'
-      const tunLog = path.join(app.getPath('temp'), 'sentinel-tun2socks.log')
+      const tmpDir = app.getPath('temp')
+      const tunLog = path.join(tmpDir, 'sentinel-tun2socks.log')
 
       // 1. Get the real default gateway on Windows
       let gateway = '0.0.0.0'
