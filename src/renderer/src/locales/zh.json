@@ -191,6 +191,7 @@
     "st_sub": "仅通过 VPN 路由指定的子网。仅限 WireGuard。",
     "st_routes_label": "路由 CIDR (逗号分隔)",
     "st_routes_hint": "默认路由排除 RFC-1918 本地范围。重新连接生效。",
+    "binaries_title": "VPN 二进制文件管理",
     "about_title": "关于",
     "about_footer": "助记词通过 OS 钥匙串加密。私钥绝不离开主进程。所有 API 调用通过 Electron 主进程代理。"
   },
