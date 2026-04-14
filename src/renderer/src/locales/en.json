@@ -31,7 +31,8 @@
     "verified": "VERIFIED",
     "missing": "MISSING",
     "checking": "Checking...",
-    "exec": "Exec"
+    "exec": "Execute",
+    "browse": "Browse"
   },
   "tabs": {
     "globe": "Globe",

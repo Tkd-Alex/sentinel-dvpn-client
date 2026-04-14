@@ -31,7 +31,8 @@
     "verified": "VERIFICADO",
     "missing": "FALTANTE",
     "checking": "Comprobando...",
-    "exec": "Ejecutar"
+    "exec": "Ejecutar",
+    "browse": "Explorar"
   },
   "tabs": {
     "globe": "Globo",

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell, safeStorage } from 'electron'
+import { app, BrowserWindow, ipcMain, shell, safeStorage, dialog } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import Store from 'electron-store'
@@ -76,6 +76,7 @@ const STORE_KEY_RPC      = 'selected_rpc'
 const STORE_KEY_WALLETS  = 'wallets'
 const STORE_KEY_ACTIVE_W = 'active_wallet'
 const STORE_KEY_SETTINGS = 'settings'
+const STORE_KEY_BINARIES = 'custom_binaries'
 const NODES_API          = 'https://api.sentnodes.com/v2/nodes'
 const RPC_TIMEOUT_MS     = 10_000
 
@@ -198,6 +199,18 @@ function registerIpcHandlers(): void {
   })
 
   ipcMain.handle('binary:check', () => checkBinaries())
+  ipcMain.handle('binary:browse', async (_e, name: string) => {
+    const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow!, {
+      title: `Select ${name} executable`,
+      filters: [{ name: 'Executables', extensions: ['exe', 'app', 'bin', '*'] }],
+      properties: ['openFile']
+    })
+    if (canceled || filePaths.length === 0) return { success: false }
+    const custom = (store.get(STORE_KEY_BINARIES) as Record<string, string>) ?? {}
+    custom[name] = filePaths[0]
+    store.set(STORE_KEY_BINARIES, custom)
+    return { success: true, path: filePaths[0] }
+  })
   ipcMain.handle('binary:install', async (_e, cmd: string) => {
     const res = execPrivileged([cmd])
     if (res.code === 0) return { success: true }
@@ -955,21 +968,32 @@ async function setupWallet(mnemonic: string, label: string, rpc: string) {
 function withTimeout<T>(promise: Promise<T> | undefined, ms: number, msg: string): Promise<T> { if (!promise) return Promise.reject(new Error(msg)); return Promise.race([promise, new Promise<never>((_, rej) => setTimeout(() => rej(new Error(msg)), ms))]) }
 
 function checkBinaries() {
+  const custom = (store.get(STORE_KEY_BINARIES) as Record<string, string>) ?? {}
   const getHash = (p: string) => { try { const data = fs.readFileSync(p); return crypto.createHash('sha256').update(data).digest('hex') } catch { return null } }
   const find = (n: string) => { 
+    if (custom[n] && fs.existsSync(custom[n])) return custom[n]
     try { 
       const cmd = process.platform === 'win32' ? `where ${n}` : `which ${n}`; 
       return execSync(cmd, { stdio: 'pipe' }).toString().trim().split('\n')[0] 
     } catch { 
-      if (process.platform === 'win32' && n === 'wireguard.exe') {
-        const standardPath = 'C:\\Program Files\\WireGuard\\wireguard.exe'
-        if (fs.existsSync(standardPath)) return standardPath
+      if (process.platform === 'win32') {
+        if (n === 'wireguard.exe') {
+          const standardPath = 'C:\\Program Files\\WireGuard\\wireguard.exe'
+          if (fs.existsSync(standardPath)) return standardPath
+        }
+        // Fallback for v2ray and tun2socks if they are in the same folder as the app
+        const localPath = path.join(path.dirname(app.getPath('exe')), n)
+        if (fs.existsSync(localPath)) return localPath
       }
       return null 
     } 
   }
   const getDistro = () => { if (process.platform !== 'linux') return process.platform; try { const content = fs.readFileSync('/etc/os-release', 'utf8').toLowerCase(); if (content.includes('id=arch') || content.includes('id_like=arch')) return 'arch'; if (content.includes('id=ubuntu') || content.includes('id=debian') || content.includes('id_like=debian')) return 'debian'; if (content.includes('id=fedora') || content.includes('id=rhel') || content.includes('id_like=fedora')) return 'fedora'; if (content.includes('id=suse') || content.includes('id_like=suse')) return 'suse' } catch { } return 'linux' }
-  const wgName = process.platform === 'win32' ? 'wireguard.exe' : 'wg-quick'; const v2Path = find('v2ray'); const wgPath = find(wgName); const t2sPath = find('tun2socks')
+  const wgName = process.platform === 'win32' ? 'wireguard.exe' : 'wg-quick'; 
+  const v2Name = process.platform === 'win32' ? 'v2ray.exe' : 'v2ray';
+  const t2sName = process.platform === 'win32' ? 'tun2socks.exe' : 'tun2socks';
+  
+  const v2Path = find(v2Name); const wgPath = find(wgName); const t2sPath = find(t2sName)
   return { wireguard: !!wgPath, wgPath, wgHash: wgPath ? getHash(wgPath) : null, v2ray: !!v2Path, v2rayPath: v2Path, v2rayHash: v2Path ? getHash(v2Path) : null, tun2socks: !!t2sPath, tun2socksPath: t2sPath, tun2socksHash: t2sPath ? getHash(t2sPath) : null, platform: process.platform, distro: getDistro() }
 }
 
