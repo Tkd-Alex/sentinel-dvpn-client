@@ -633,7 +633,7 @@ async function setupTransparentV2Ray(v2ray: V2Ray): Promise<{ success: boolean; 
         // Wait loop for interface to appear (max 20s)
         `for ($i=0; $i -lt 20; $i++) { if (Get-NetAdapter -Name "${activeTunInterface}" -ErrorAction SilentlyContinue) { break }; Start-Sleep -Seconds 1 }`,
         `$ifIdx = (Get-NetIPInterface -InterfaceAlias "${activeTunInterface}" -AddressFamily IPv4).InterfaceIndex`,
-        `netsh interface ipv4 set address name="${activeTunInterface}" static 10.0.0.1 255.255.255.0 none`,
+        `netsh interface ipv4 set address name="${activeTunInterface}" source=static addr=10.0.0.1 mask=255.255.255.0`,
         `netsh interface ipv4 set dnsservers name="${activeTunInterface}" static address=1.1.1.1 register=none validate=no`,
         // Use a very low METRIC (2) so it takes precedence over the physical interface
         `route add 0.0.0.0 mask 128.0.0.0 10.0.0.1 METRIC 2 IF $ifIdx`,
@@ -883,7 +883,6 @@ async function execPrivileged(cmds: string[]): Promise<{ code: number; stdout: s
     const psPath = path.join(tmpDir, `sentinel-priv-${reqId}.ps1`)
     const logPath = path.join(tmpDir, `sentinel-priv-${reqId}.log`)
 
-    // Robust PowerShell script: Detach background processes and exit clean
     const psLines = [
       `$ErrorActionPreference = "Continue"`,
       `Start-Transcript -Path "${logPath}" -Force`,
@@ -892,19 +891,15 @@ async function execPrivileged(cmds: string[]): Promise<{ code: number; stdout: s
     ]
     fs.writeFileSync(psPath, psLines.join('\r\n'), { encoding: 'utf8' })
 
-    // IMPORTANT: No -Wait here to avoid freezing if children stay alive, 
-    // but we use a small trick: Start-Process powershell -Wait ensures the SCRIPT finishes,
-    // while Start-Process inside the script (for tun2socks) will NOT have -Wait.
-    const psCmd = `powershell -Command "Start-Process powershell -ArgumentList '-ExecutionPolicy Bypass -File \"\"${psPath}\"\"' -Verb RunAs -Wait -WindowStyle Hidden"`
-
+    const psCmd = `Start-Process powershell -ArgumentList '-ExecutionPolicy Bypass -File \"${psPath}\"' -Verb RunAs -Wait -WindowStyle Hidden`
+    
     return new Promise((res) => {
-      const { exec } = require('child_process')
-      exec(psCmd, (error: any) => {
+      const child = spawn('powershell', ['-Command', psCmd])
+      child.on('close', (code: number) => {
         const output = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : ''
-        if (error) {
-          console.error(`[ExecPrivileged] Script failed. Log: ${logPath}`)
-          // Do not delete logs on error to allow for debugging
-          res({ code: error.code || 1, stdout: '', stderr: output || error.message })
+        if (code !== 0) {
+          console.error(`[ExecPrivileged] Failed with code ${code}. Log: ${logPath}`)
+          res({ code, stdout: '', stderr: output || `PowerShell exited with code ${code}` })
         } else {
           try { fs.unlinkSync(psPath); fs.unlinkSync(logPath) } catch {}
           res({ code: 0, stdout: output, stderr: '' })
