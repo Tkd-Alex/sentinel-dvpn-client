@@ -1072,7 +1072,18 @@ function checkBinaries() {
   const t2sName = process.platform === 'win32' ? 'tun2socks.exe' : 'tun2socks';
   
   const v2Path = find(v2Name); const wgPath = find(wgName); const t2sPath = find(t2sName)
-  return { wireguard: !!wgPath, wgPath, wgHash: wgPath ? getHash(wgPath) : null, v2ray: !!v2Path, v2rayPath: v2Path, v2rayHash: v2Path ? getHash(v2Path) : null, tun2socks: !!t2sPath, tun2socksPath: t2sPath, tun2socksHash: t2sPath ? getHash(t2sPath) : null, platform: process.platform, distro: getDistro() }
+  
+  let wintunFound = true
+  if (process.platform === 'win32' && t2sPath) {
+    wintunFound = fs.existsSync(path.join(path.dirname(t2sPath), 'wintun.dll'))
+  }
+
+  return { 
+    wireguard: !!wgPath, wgPath, wgHash: wgPath ? getHash(wgPath) : null, 
+    v2ray: !!v2Path, v2rayPath: v2Path, v2rayHash: v2Path ? getHash(v2Path) : null, 
+    tun2socks: !!t2sPath && wintunFound, tun2socksPath: t2sPath, tun2socksHash: t2sPath ? getHash(t2sPath) : null, 
+    platform: process.platform, distro: getDistro() 
+  }
 }
 
 async function killActiveConnections(sendEndSession = true) {
