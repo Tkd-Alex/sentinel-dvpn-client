@@ -191,6 +191,7 @@
     "st_sub": "Router uniquement certains sous-réseaux via le VPN. WireGuard seulement.",
     "st_routes_label": "CIDRs routés (séparés par des virgules)",
     "st_routes_hint": "Les routes par défaut excluent les plages locales RFC-1918.",
+    "binaries_title": "Gestion des binaires VPN",
     "about_title": "À propos",
     "about_footer": "Mnémonique chiffré sur le système. La clé privée ne quitte jamais le processus principal."
   },

@@ -191,6 +191,7 @@
     "st_sub": "Solo enrutar subredes específicas a través de la VPN. Solo WireGuard.",
     "st_routes_label": "CIDR enrutados (separados por comas)",
     "st_routes_hint": "Las rutas predeterminadas excluyen los rangos locales RFC-1918.",
+    "binaries_title": "Gestión de Binarios VPN",
     "about_title": "Acerca de",
     "about_footer": "Mnemónico cifrado en el sistema. La clave privada nunca sale del proceso principal."
   },

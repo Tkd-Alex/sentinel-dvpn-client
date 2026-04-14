@@ -191,6 +191,7 @@
     "st_sub": "Nur spezifizierte Subnetze über VPN leiten. Nur WireGuard.",
     "st_routes_label": "Geroutete CIDRs (kommagetrennt)",
     "st_routes_hint": "Standardrouten schließen RFC-1918 lokale Bereiche aus.",
+    "binaries_title": "VPN-Binärdateien-Verwaltung",
     "about_title": "Über",
     "about_footer": "Wiederherstellungsphrase verschlüsselt im System gespeichert. Der private Schlüssel verlässt niemals den Hauptprozess."
   },
