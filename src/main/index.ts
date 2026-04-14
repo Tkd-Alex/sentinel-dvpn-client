@@ -274,6 +274,10 @@ function registerIpcHandlers(): void {
   })
 
   ipcMain.handle('wallet:hasMnemonic', () => getWalletList().length > 0)
+  ipcMain.handle('wallet:setup', async (_e, mnemonic: string, label?: string) => {
+    const rpc = (store.get(STORE_KEY_RPC) as string | undefined) ?? DEFAULT_RPC
+    return setupWallet(mnemonic, label || 'Default', rpc)
+  })
   ipcMain.handle('wallet:loadStored', async () => {
     const wallets = getWalletList()
     if (!wallets.length) return { success: false, error: 'No stored wallets' }
