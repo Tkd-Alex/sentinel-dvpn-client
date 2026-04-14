@@ -813,7 +813,10 @@ function execPrivileged(cmds: string[]): { code: number; stdout: string; stderr:
       const stdout = execSync(osaCmd).toString()
       return { code: 0, stdout, stderr: '' }
     } else if (plat === 'win32') {
-      const stdout = execSync(fullCmd).toString()
+      // Use powershell Start-Process with -Verb RunAs to trigger UAC elevation prompt
+      const escapedCmd = fullCmd.replace(/"/g, '""')
+      const psCmd = `powershell -Command "Start-Process cmd -ArgumentList '/c ${escapedCmd}' -Verb RunAs -Wait"`
+      const stdout = execSync(psCmd).toString()
       return { code: 0, stdout, stderr: '' }
     } else {
       const bin = ['pkexec', 'gksudo', 'kdesudo', 'sudo'].find(b => {
