@@ -850,7 +850,11 @@ async function wgQuickUp(configFile: string): Promise<{ success: boolean; error?
     stderr.includes('resolvconf') || stderr.includes('resolve1') || stderr.includes('Failed to set DNS') || stderr.includes('DNS')
 
   const run = () => {
-    if (plat === 'win32') return { code: execPrivileged([`wireguard.exe /installservice "${configFile}"`]).code, stderr: '' } // Windows stdout/err handling is limited here
+    if (plat === 'win32') {
+      const info = checkBinaries()
+      const exe = info.wgPath || 'wireguard.exe'
+      return { code: execPrivileged([`"${exe}" /installservice "${configFile}"`]).code, stderr: '' }
+    }
     return execPrivileged([`wg-quick up "${configFile}"`])
   }
 
