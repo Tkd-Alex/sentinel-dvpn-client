@@ -185,6 +185,10 @@ export default function BinarySetup({ status, onDismiss, onRecheck }: Props) {
                         {g.id === 'tun2socks' && current.platform === 'win32' && (
                           <div style={{ marginTop: 8, color: 'var(--orange)', fontWeight: 600 }}>
                             ⚠ {t('binary.wintun_missing')}
+                            <br />
+                            <a href="https://www.wintun.net/" target="_blank" rel="noreferrer" style={{ color: 'var(--cyan)', fontSize: 10, textDecoration: 'underline' }}>
+                              https://www.wintun.net/
+                            </a>
                           </div>
                         )}
                       </div>

@@ -303,6 +303,7 @@
       "wireguard": "Erforderlich für Hochleistungs-VPN-Tunnel auf Kernelebene.",
       "v2ray": "Erforderlich für verschleierte Proxy-Verbindungen (VMess/VLess).",
       "tun2socks": "Erforderlich für systemweite V2Ray-Unterstützung via TUN-Schnittstelle."
-    }
+    },
+    "wintun_missing": "Windows-Anforderung: Kopieren Sie 'wintun.dll' in denselben Ordner wie tun2socks.exe."
   }
 }

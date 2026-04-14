@@ -303,6 +303,7 @@
       "wireguard": "مطلوب لأنفاق VPN عالية الأداء على مستوى الكيرنل.",
       "v2ray": "مطلوب لاتصالات البروكسي المموهة (VMess/VLess).",
       "tun2socks": "مطلوب لدعم V2Ray على مستوى النظام عبر واجهة TUN."
-    }
+    },
+    "wintun_missing": "متطلبات Windows: ضع 'wintun.dll' في نفس مجلد tun2socks.exe."
   }
 }
