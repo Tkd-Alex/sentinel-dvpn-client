@@ -212,7 +212,7 @@ function registerIpcHandlers(): void {
     return { success: true, path: filePaths[0] }
   })
   ipcMain.handle('binary:install', async (_e, cmd: string) => {
-    const res = execPrivileged([cmd])
+    const res = await execPrivileged([cmd])
     if (res.code === 0) return { success: true }
     return { success: false, error: res.stderr }
   })
@@ -641,7 +641,7 @@ async function setupTransparentV2Ray(v2ray: V2Ray): Promise<{ success: boolean; 
       ]
 
       try {
-        const res = execPrivileged(setupCmds)
+        const res = await execPrivileged(setupCmds)
         if (res.code !== 0) {
           const tunError = fs.existsSync(tunLog) ? fs.readFileSync(tunLog, 'utf8') : ''
           throw new Error(res.stderr + (tunError ? `\nTun2Socks Log: ${tunError}` : ''))
@@ -843,12 +843,12 @@ async function applyKillSwitch(enable: boolean, ifNameOverride?: string): Promis
       ? [`iptables -I OUTPUT ! -o ${targetIf} -m mark ! --mark 0xca6c -j DROP`, `iptables -I OUTPUT -o lo -j ACCEPT`, `ip6tables -I OUTPUT ! -o ${targetIf} -j DROP`, `ip6tables -I OUTPUT -o lo -j ACCEPT`] 
       : [`iptables -D OUTPUT ! -o ${targetIf} -m mark ! --mark 0xca6c -j DROP || true`, `iptables -D OUTPUT -o lo -j ACCEPT || true`, `ip6tables -D OUTPUT ! -o ${targetIf} -j DROP || true`, `ip6tables -D OUTPUT -o lo -j ACCEPT || true`]
     
-    const res = execPrivileged(cmds)
+    const res = await execPrivileged(cmds)
     if (res.code !== 0 && enable) console.warn(`[KillSwitch] Linux apply failed: ${res.stderr}`)
   } else if (plat === 'darwin') {
     const rules = enable ? `block drop all\npass on lo0\npass on utun+\n` : `pass all\n`
     fs.writeFileSync('/tmp/sentinel-pf.conf', rules)
-    const res = execPrivileged([`pfctl -f /tmp/sentinel-pf.conf ${enable ? '-e' : '-d'} || true`])
+    const res = await execPrivileged([`pfctl -f /tmp/sentinel-pf.conf ${enable ? '-e' : '-d'} || true`])
     if (res.code !== 0 && enable) console.warn(`[KillSwitch] PF failed: ${res.stderr}`)
   } else if (plat === 'win32') {
     try {
@@ -863,59 +863,60 @@ async function applyKillSwitch(enable: boolean, ifNameOverride?: string): Promis
   }
 }
 
-function execPrivileged(cmds: string[]): { code: number; stdout: string; stderr: string } {
+async function execPrivileged(cmds: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
   const plat = process.platform
-  const fullCmd = cmds.join(' && ')
+  const { exec } = require('child_process')
   console.log(`[ExecPrivileged] Platform: ${plat}`)
   cmds.forEach((c, i) => console.log(`  [Cmd #${i+1}]: ${c}`))
 
-  try {
-    if (plat === 'darwin') {
-      const osaCmd = `osascript -e 'do shell script "${fullCmd.replace(/"/g, '\\"')}" with administrator privileges'`
-      const stdout = execSync(osaCmd).toString()
-      return { code: 0, stdout, stderr: '' }
-    } else if (plat === 'win32') {
-      const tmpDir = app.getPath('temp')
-      const psPath = path.join(tmpDir, `sentinel-priv-${crypto.randomBytes(4).toString('hex')}.ps1`)
-      const logPath = path.join(tmpDir, `sentinel-priv-${crypto.randomBytes(4).toString('hex')}.log`)
+  if (plat === 'darwin') {
+    const fullCmd = cmds.join(' && ')
+    const osaCmd = `osascript -e 'do shell script "${fullCmd.replace(/"/g, '\\"')}" with administrator privileges'`
+    return new Promise((res) => {
+      exec(osaCmd, (error: any, stdout: string, stderr: string) => {
+        res({ code: error ? (error.code || 1) : 0, stdout, stderr })
+      })
+    })
+  } else if (plat === 'win32') {
+    const tmpDir = app.getPath('temp')
+    const psPath = path.join(tmpDir, `sentinel-priv-${crypto.randomBytes(4).toString('hex')}.ps1`)
+    const logPath = path.join(tmpDir, `sentinel-priv-${crypto.randomBytes(4).toString('hex')}.log`)
 
-      // Create PowerShell script content. Native PS commands, no cmd /c wrapper.
-      const psLines = [
-        `$ErrorActionPreference = "Continue"`,
-        `Start-Transcript -Path "${logPath}" -Force`,
-        ...cmds.map(c => `Write-Host "[EXEC] ${c.replace(/"/g, '`\"')}"; ${c}`),
-        `Stop-Transcript`
-      ]
-      fs.writeFileSync(psPath, psLines.join('\r\n'), { encoding: 'utf8' })
+    const psLines = [
+      `$ErrorActionPreference = "Continue"`,
+      `Start-Transcript -Path "${logPath}" -Force`,
+      ...cmds.map(c => `Write-Host "[EXEC] ${c.replace(/"/g, '`\"')}"; ${c}`),
+      `Stop-Transcript`
+    ]
+    fs.writeFileSync(psPath, psLines.join('\r\n'), { encoding: 'utf8' })
 
-      try {
-        // Execute the PS1 script via PowerShell with UAC elevation.
-        const psCmd = `powershell -Command "Start-Process powershell -ArgumentList '-ExecutionPolicy Bypass -File \"\"${psPath}\"\"' -Verb RunAs -Wait -WindowStyle Hidden"`
-        execSync(psCmd)
-
+    const psCmd = `powershell -Command "Start-Process powershell -ArgumentList '-ExecutionPolicy Bypass -File \"\"${psPath}\"\"' -Verb RunAs -Wait -WindowStyle Hidden"`
+    
+    return new Promise((res) => {
+      exec(psCmd, (error: any) => {
         const output = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : ''
-        try { fs.unlinkSync(psPath); fs.unlinkSync(logPath) } catch {}
-        return { code: 0, stdout: output, stderr: '' }
-      } catch (e: any) {
-        const output = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : ''
-        console.error(`[ExecPrivileged] Failed. Log: ${logPath}`)
-        console.error(`[ExecPrivileged] Output:\n${output}`)
-        try { fs.unlinkSync(psPath) } catch {} 
-        return { code: e.status || 1, stdout: '', stderr: output || e.message }
-      }
-    } else {      const bin = ['pkexec', 'gksudo', 'kdesudo', 'sudo'].find(b => {
-        try { execSync(`which ${b}`, { stdio: 'ignore' }); return true } catch { return false }
-      }) || 'sudo'
-      const cmdPrefix = bin === 'sudo' ? 'sudo -A' : bin
-      const stdout = execSync(`${cmdPrefix} bash -c "${fullCmd.replace(/"/g, '\\"')}"`).toString()
-      return { code: 0, stdout, stderr: '' }
-    }
-  } catch (e: any) {
-    return { 
-      code: e.status ?? 1, 
-      stdout: e.stdout?.toString() ?? '', 
-      stderr: e.stderr?.toString() ?? e.message 
-    }
+        if (error) {
+          console.error(`[ExecPrivileged] Failed. Log: ${logPath}`)
+          try { fs.unlinkSync(psPath) } catch {}
+          res({ code: error.code || 1, stdout: '', stderr: output || error.message })
+        } else {
+          try { fs.unlinkSync(psPath); fs.unlinkSync(logPath) } catch {}
+          res({ code: 0, stdout: output, stderr: '' })
+        }
+      })
+    })
+  } else {
+    const fullCmd = cmds.join(' && ')
+    const bin = ['pkexec', 'gksudo', 'kdesudo', 'sudo'].find(b => {
+      try { execSync(`which ${b}`, { stdio: 'ignore' }); return true } catch { return false }
+    }) || 'sudo'
+    const cmdPrefix = bin === 'sudo' ? 'sudo -A' : bin
+    const finalCmd = `${cmdPrefix} bash -c "${fullCmd.replace(/"/g, '\\"')}"`
+    return new Promise((res) => {
+      exec(finalCmd, (error: any, stdout: string, stderr: string) => {
+        res({ code: error ? (error.code || 1) : 0, stdout, stderr })
+      })
+    })
   }
 }
 
@@ -936,19 +937,20 @@ async function wgQuickUp(configFile: string): Promise<{ success: boolean; error?
   const isDnsError = (stderr: string) => 
     stderr.includes('resolvconf') || stderr.includes('resolve1') || stderr.includes('Failed to set DNS') || stderr.includes('DNS')
 
-  const run = () => {
+  const run = async () => {
     if (plat === 'win32') {
       const info = checkBinaries()
       const exe = info.wgPath || 'wireguard.exe'
-      return { code: execPrivileged([`"${exe}" /installtunnelservice "${configFile}"`]).code, stderr: '' }
+      const res = await execPrivileged([`"${exe}" /installtunnelservice "${configFile}"`])
+      return { code: res.code, stderr: res.stderr }
     }
-    return execPrivileged([`wg-quick up "${configFile}"`])
+    return await execPrivileged([`wg-quick up "${configFile}"`])
   }
 
-  let r1 = run()
+  let r1 = await run()
   if (r1.code === 0) {
     const settings = getSettings()
-    if (settings.killSwitch) applyKillSwitch(true).catch(() => {})
+    if (settings.killSwitch) await applyKillSwitch(true)
     startTrafficPolling()
     return { success: true }
   }
@@ -957,7 +959,7 @@ async function wgQuickUp(configFile: string): Promise<{ success: boolean; error?
     mainWindow?.webContents.send('vpn:dns-retry-ask')
     await new Promise((res) => { ipcMain.once('vpn:dns-retry-approved', () => res(true)) })
     patchConfigFileForDns(configFile)
-    let r2 = run()
+    let r2 = await run()
     if (r2.code === 0) {
       startTrafficPolling()
       mainWindow?.webContents.send('vpn:warning', { message: 'Connected without DNS injection.' })
@@ -977,10 +979,10 @@ async function wgQuickDown(configFile: string): Promise<void> {
       const info = checkBinaries()
       const exe = info.wgPath || 'wireguard.exe'
       // Use execPrivileged to trigger UAC elevation for uninstallation
-      execPrivileged([`"${exe}" /uninstalltunnelservice ${ifName}`])
+      await execPrivileged([`"${exe}" /uninstalltunnelservice ${ifName}`])
     } else {
       try { execSync(`ip link show ${ifName}`, { stdio: 'ignore' }) } catch { return }
-      execPrivileged([`wg-quick down "${configFile}"`])
+      await execPrivileged([`wg-quick down "${configFile}"`])
     }
   } catch (e) { console.warn('wgQuickDown failed', e) }
 
@@ -1120,7 +1122,7 @@ async function killActiveConnections(sendEndSession = true) {
         `ip link set dev ${activeTunInterface} down || true`, 
         `ip tuntap del dev ${activeTunInterface} mode tun || true`
       ]
-      try { execPrivileged(cleanupCmds) } catch (e) { console.warn('Linux cleanup failed', e) }
+      try { await execPrivileged(cleanupCmds) } catch (e) { console.warn('Linux cleanup failed', e) }
     } else if (plat === 'darwin' && activeTunInterface) {
       const cleanupCmds = [
         `kill ${activeTun2Socks.pid} || true`,
@@ -1128,7 +1130,7 @@ async function killActiveConnections(sendEndSession = true) {
         `route delete 128.0.0.0/1 || true`,
         activeV2RayServerIp ? `route delete ${activeV2RayServerIp} || true` : `true`
       ]
-      try { execPrivileged(cleanupCmds) } catch (e) { console.warn('macOS cleanup failed', e) }
+      try { await execPrivileged(cleanupCmds) } catch (e) { console.warn('macOS cleanup failed', e) }
     } else if (plat === 'win32') {
       try { 
         activeTun2Socks.kill()
