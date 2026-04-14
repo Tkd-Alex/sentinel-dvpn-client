@@ -636,6 +636,7 @@ async function setupTransparentV2Ray(v2ray: V2Ray): Promise<{ success: boolean; 
         // 4. Configure the interface and global routes (requires UAC again)
         const res2 = execPrivileged([
           `netsh interface ipv4 set address name="${activeTunInterface}" source=static addr=10.0.0.1 mask=255.255.255.0 gateway=none`,
+          `netsh interface ipv4 set dnsservers name="${activeTunInterface}" static address=1.1.1.1 register=none validate=no`,
           `route add 0.0.0.0 mask 128.0.0.0 10.0.0.1 METRIC 5`,
           `route add 128.0.0.0 mask 128.0.0.0 10.0.0.1 METRIC 5`
         ])
@@ -861,18 +862,22 @@ function execPrivileged(cmds: string[]): { code: number; stdout: string; stderr:
       const batchPath = path.join(tmpDir, `sentinel-priv-${crypto.randomBytes(4).toString('hex')}.bat`)
       const logPath = path.join(tmpDir, `sentinel-priv-${crypto.randomBytes(4).toString('hex')}.log`)
 
-      // Create batch file content with error checking between commands
-      const batchLines = ['@echo off', 'chcp 65001 > nul']
+      // Simplified batch: no more ( ) blocks, redirect each command individually
+      const batchLines = [
+        '@echo off',
+        'chcp 65001 > nul',
+        `echo [START] > "${logPath}"`
+      ]
       for (const cmd of cmds) {
-        batchLines.push(cmd)
-        batchLines.push('if %errorlevel% neq 0 exit /b %errorlevel%')
+        batchLines.push(`echo [EXEC] ${cmd.replace(/"/g, '')} >> "${logPath}" 2>&1`)
+        batchLines.push(`${cmd} >> "${logPath}" 2>&1`)
+        batchLines.push(`if %errorlevel% neq 0 exit /b %errorlevel%`)
       }
+      batchLines.push('exit /b 0')
       fs.writeFileSync(batchPath, batchLines.join('\r\n'), { encoding: 'utf8' })
 
       try {
-        // Execute the batch file via PowerShell with UAC elevation.
-        // Simplified quoting: using single quotes for ArgumentList and backticks for internal quotes if needed.
-        const psCmd = `powershell -Command "$p = Start-Process cmd -ArgumentList '/c \"${batchPath}\" > \"${logPath}\" 2>&1' -Verb RunAs -PassThru -Wait; exit $p.ExitCode"`
+        const psCmd = `powershell -Command "$p = Start-Process cmd -ArgumentList '/c \"\"${batchPath}\"\"' -Verb RunAs -PassThru -Wait; exit $p.ExitCode"`
         execSync(psCmd)
 
         const output = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : ''
@@ -881,7 +886,7 @@ function execPrivileged(cmds: string[]): { code: number; stdout: string; stderr:
       } catch (e: any) {
         const output = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : ''
         console.error(`[ExecPrivileged] Failed. Log preserved at: ${logPath}`)
-        console.error(`[ExecPrivileged] Stderr: ${output}`)
+        console.error(`[ExecPrivileged] Output:\n${output}`)
         try { fs.unlinkSync(batchPath) } catch {} 
         return { code: e.status || 1, stdout: '', stderr: output || e.message }
       }
