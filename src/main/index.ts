@@ -628,15 +628,14 @@ async function setupTransparentV2Ray(v2ray: V2Ray): Promise<{ success: boolean; 
       const setupCmds = [
         `route add ${serverIp} mask 255.255.255.255 ${gateway} METRIC 1`,
         // Launch tun2socks and capture the object to get the PID
-        `$p = Start-Process -FilePath "${exe}" -ArgumentList "-device ${activeTunInterface}", "-proxy socks5://127.0.0.1:${socksPort}" -RedirectStandardOutput "${tunLog}" -RedirectStandardError "${tunLog}" -WindowStyle Hidden -PassThru`,
+        `$p = Start-Process -FilePath "${exe}" -ArgumentList "-device", "tun://${activeTunInterface}", "-proxy", "socks5://127.0.0.1:${socksPort}" -RedirectStandardOutput "${tunLog}" -RedirectStandardError "${tunLog}" -WindowStyle Hidden -PassThru`,
         `$p.Id | Out-File -FilePath "${path.join(tmpDir, 'tun.pid')}" -Encoding utf8`,
         // Wait loop for interface to appear
         `for ($i=0; $i -lt 20; $i++) { if (Get-NetAdapter -Name "${activeTunInterface}" -ErrorAction SilentlyContinue) { break }; Start-Sleep -Seconds 1 }`,
         `$ifIdx = (Get-NetIPInterface -InterfaceAlias "${activeTunInterface}" -AddressFamily IPv4).InterfaceIndex`,
         `netsh interface ipv4 set address name="${activeTunInterface}" source=static addr=10.0.0.1 mask=255.255.255.0 gateway=none`,
         `netsh interface ipv4 set dnsservers name="${activeTunInterface}" static address=1.1.1.1 register=none validate=no`,
-        // Use a very low METRIC (2) so it takes precedence over the physical interface (usually 15-25)
-        // Also specify the interface index (IF $ifIdx) to avoid routing ambiguity
+        // Use a very low METRIC (2) so it takes precedence over the physical interface
         `route add 0.0.0.0 mask 128.0.0.0 10.0.0.1 METRIC 2 IF $ifIdx`,
         `route add 128.0.0.0 mask 128.0.0.0 10.0.0.1 METRIC 2 IF $ifIdx`
       ]
@@ -880,11 +879,11 @@ function execPrivileged(cmds: string[]): { code: number; stdout: string; stderr:
       const psPath = path.join(tmpDir, `sentinel-priv-${crypto.randomBytes(4).toString('hex')}.ps1`)
       const logPath = path.join(tmpDir, `sentinel-priv-${crypto.randomBytes(4).toString('hex')}.log`)
 
-      // Create PowerShell script content. Much more robust than Batch.
+      // Create PowerShell script content. Native PS commands, no cmd /c wrapper.
       const psLines = [
         `$ErrorActionPreference = "Continue"`,
         `Start-Transcript -Path "${logPath}" -Force`,
-        ...cmds.map(c => `Write-Host "[EXEC] ${c.replace(/"/g, '`\"')}"; cmd /c "${c.replace(/"/g, '`\"')}"`),
+        ...cmds.map(c => `Write-Host "[EXEC] ${c.replace(/"/g, '`\"')}"; ${c}`),
         `Stop-Transcript`
       ]
       fs.writeFileSync(psPath, psLines.join('\r\n'), { encoding: 'utf8' })
