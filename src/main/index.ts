@@ -848,7 +848,8 @@ async function applyKillSwitch(enable: boolean, ifNameOverride?: string): Promis
 function execPrivileged(cmds: string[]): { code: number; stdout: string; stderr: string } {
   const plat = process.platform
   const fullCmd = cmds.join(' && ')
-  console.log(`[ExecPrivileged] Platform: ${plat}, Commands count: ${cmds.length}`)
+  console.log(`[ExecPrivileged] Platform: ${plat}`)
+  cmds.forEach((c, i) => console.log(`  [Cmd #${i+1}]: ${c}`))
 
   try {
     if (plat === 'darwin') {
@@ -870,8 +871,8 @@ function execPrivileged(cmds: string[]): { code: number; stdout: string; stderr:
 
       try {
         // Execute the batch file via PowerShell with UAC elevation.
-        // We redirect output to a log file within the elevated context.
-        const psCmd = `powershell -Command "$p = Start-Process cmd -ArgumentList '/c \"\"${batchPath}\"\" > \"\"${logPath}\"\" 2>&1' -Verb RunAs -PassThru -Wait; exit $p.ExitCode"`
+        // Simplified quoting: using single quotes for ArgumentList and backticks for internal quotes if needed.
+        const psCmd = `powershell -Command "$p = Start-Process cmd -ArgumentList '/c \"${batchPath}\" > \"${logPath}\" 2>&1' -Verb RunAs -PassThru -Wait; exit $p.ExitCode"`
         execSync(psCmd)
 
         const output = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : ''
@@ -879,13 +880,12 @@ function execPrivileged(cmds: string[]): { code: number; stdout: string; stderr:
         return { code: 0, stdout: output, stderr: '' }
       } catch (e: any) {
         const output = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : ''
-        // Keep logs on error for debugging
         console.error(`[ExecPrivileged] Failed. Log preserved at: ${logPath}`)
-        try { fs.unlinkSync(batchPath) } catch {}
+        console.error(`[ExecPrivileged] Stderr: ${output}`)
+        try { fs.unlinkSync(batchPath) } catch {} 
         return { code: e.status || 1, stdout: '', stderr: output || e.message }
       }
-    } else {
-      const bin = ['pkexec', 'gksudo', 'kdesudo', 'sudo'].find(b => {
+    } else {      const bin = ['pkexec', 'gksudo', 'kdesudo', 'sudo'].find(b => {
         try { execSync(`which ${b}`, { stdio: 'ignore' }); return true } catch { return false }
       }) || 'sudo'
       const cmdPrefix = bin === 'sudo' ? 'sudo -A' : bin
