@@ -949,3 +949,44 @@ h1,h2,h3 { letter-spacing: .08em; text-transform: uppercase; }
   margin-bottom: 12px;
   line-height: 1.5;
 }
+
+/* ═══════════════════════════════════════════════════
+   Management Tab Layout
+═══════════════════════════════════════════════════ */
+.manage-tab-layout {
+  display: flex;
+  height: 100%;
+  gap: 24px;
+  padding: 20px;
+  overflow: hidden;
+}
+
+.manage-sidebar {
+  flex: 0 0 450px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  overflow-y: auto;
+  padding-right: 10px;
+}
+
+.manage-main {
+  flex: 1;
+  overflow-y: auto;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.manage-binaries-section {
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+}
+
+.binary-check-embedded {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}

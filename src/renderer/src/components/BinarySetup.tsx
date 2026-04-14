@@ -144,7 +144,7 @@ export default function BinarySetup({ status, onDismiss, onRecheck, embedded = f
   const guides = GUIDES(current, t).filter(g => !g.found)
   
   const content = (
-    <div className={embedded ? "binary-check-embedded" : "binary-check-card"} style={embedded ? {} : { maxWidth: 700 }}>
+    <div className={embedded ? "binary-check-embedded" : "binary-check-card"} style={embedded ? { padding: '16px 4px' } : { maxWidth: 700 }}>
       {!embedded && <button className="modal-close" style={{ position: 'absolute', top: 20, right: 20 }} onClick={onDismiss}>✕</button>}
 
       <div className="binary-check-header">

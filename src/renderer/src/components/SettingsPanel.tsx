@@ -65,11 +65,9 @@ export default function SettingsPanel({ currentRpc }: Props) {
   })
   const [saved,   setSaved]   = useState(false)
   const [ksError, setKsError] = useState<string | null>(null)
-  const [binaries, setBinaries] = useState<BinaryStatus | null>(null)
 
   useEffect(() => {
     window.api.getSettings().then(s => { if (s) setSettings(s as AppSettings) })
-    window.api.checkBinaries().then((b: any) => setBinaries(b))
   }, [])
 
   async function save(patch: Partial<AppSettings>) {
@@ -194,24 +192,6 @@ export default function SettingsPanel({ currentRpc }: Props) {
               {t('settings.st_routes_hint')}
             </div>
           </div>
-        )}
-      </div>
-
-      {/* ── Binaries Management ── */}
-      <div className="settings-section">
-        <div className="settings-section-label">{t('settings.binaries_title')}</div>
-        {binaries ? (
-          <BinarySetup
-            status={binaries}
-            onRecheck={async () => {
-              const fresh = await window.api.checkBinaries()
-              setBinaries(fresh)
-              return fresh
-            }}
-            embedded
-          />
-        ) : (
-          <div className="spinner" style={{ width: 20, height: 20, margin: '20px auto' }} />
         )}
       </div>
 
