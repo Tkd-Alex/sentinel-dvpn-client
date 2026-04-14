@@ -853,7 +853,7 @@ async function wgQuickUp(configFile: string): Promise<{ success: boolean; error?
     if (plat === 'win32') {
       const info = checkBinaries()
       const exe = info.wgPath || 'wireguard.exe'
-      return { code: execPrivileged([`"${exe}" /installservice "${configFile}"`]).code, stderr: '' }
+      return { code: execPrivileged([`"${exe}" /installtunnelservice "${configFile}"`]).code, stderr: '' }
     }
     return execPrivileged([`wg-quick up "${configFile}"`])
   }
@@ -887,7 +887,9 @@ async function wgQuickDown(configFile: string): Promise<void> {
 
   try {
     if (plat === 'win32') {
-      spawnSync('wireguard.exe', ['/uninstallservice', ifName], { stdio: 'ignore' })
+      const info = checkBinaries()
+      const exe = info.wgPath || 'wireguard.exe'
+      spawnSync(exe, ['/uninstalltunnelservice', ifName], { stdio: 'ignore' })
     } else {
       try { execSync(`ip link show ${ifName}`, { stdio: 'ignore' }) } catch { return }
       execPrivileged([`wg-quick down "${configFile}"`])
