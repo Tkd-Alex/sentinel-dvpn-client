@@ -614,20 +614,33 @@ async function setupTransparentV2Ray(v2ray: V2Ray): Promise<{ success: boolean; 
       const binaries = checkBinaries()
       const exe = binaries.tun2socksPath || 'tun2socks.exe'
 
-      // Prepare all privileged commands for Windows
-      const setupCmds = [
-        `route add ${serverIp} mask 255.255.255.255 0.0.0.0 METRIC 1`,
-        `netsh interface ipv4 set address name="${activeTunInterface}" source=static addr=10.0.0.1 mask=255.255.255.0 gateway=none`,
-        `route add 0.0.0.0 mask 128.0.0.0 10.0.0.1 METRIC 5`,
-        `route add 128.0.0.0 mask 128.0.0.0 10.0.0.1 METRIC 5`
-      ]
+      // 1. Get the real default gateway on Windows
+      let gateway = '0.0.0.0'
+      try {
+        const routeOut = execSync('route print 0.0.0.0').toString()
+        const match = routeOut.match(/0\.0\.0\.0\s+0\.0\.0\.0\s+(\d+\.\d+\.\d+\.\d+)/)
+        if (match) gateway = match[1]
+      } catch (e) { console.warn('[Transparent] Failed to detect gateway, using 0.0.0.0', e) }
 
       try {
-        // Execute network setup with UAC elevation
-        execPrivileged(setupCmds)
-        // Spawn tun2socks
+        // 2. Add route for the VPN server IP FIRST (requires UAC)
+        const res1 = execPrivileged([`route add ${serverIp} mask 255.255.255.255 ${gateway} METRIC 1`])
+        if (res1.code !== 0) throw new Error(res1.stderr)
+
+        // 3. Spawn tun2socks (this creates the interface)
         activeTun2Socks = spawn(exe, ['-device', activeTunInterface, '-proxy', `socks5://127.0.0.1:${socksPort}`])
-        await new Promise(r => setTimeout(r, 1000))
+        
+        // Wait for interface creation
+        await new Promise(r => setTimeout(r, 2000))
+
+        // 4. Configure the interface and global routes (requires UAC again)
+        const res2 = execPrivileged([
+          `netsh interface ipv4 set address name="${activeTunInterface}" source=static addr=10.0.0.1 mask=255.255.255.0 gateway=none`,
+          `route add 0.0.0.0 mask 128.0.0.0 10.0.0.1 METRIC 5`,
+          `route add 128.0.0.0 mask 128.0.0.0 10.0.0.1 METRIC 5`
+        ])
+        if (res2.code !== 0) throw new Error(res2.stderr)
+
       } catch (e: any) {
         throw new Error(`Windows network setup failed: ${e.message}`)
       }
@@ -866,7 +879,9 @@ function execPrivileged(cmds: string[]): { code: number; stdout: string; stderr:
         return { code: 0, stdout: output, stderr: '' }
       } catch (e: any) {
         const output = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : ''
-        try { fs.unlinkSync(batchPath); fs.unlinkSync(logPath) } catch {}
+        // Keep logs on error for debugging
+        console.error(`[ExecPrivileged] Failed. Log preserved at: ${logPath}`)
+        try { fs.unlinkSync(batchPath) } catch {}
         return { code: e.status || 1, stdout: '', stderr: output || e.message }
       }
     } else {
