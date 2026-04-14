@@ -792,11 +792,11 @@ async function applyKillSwitch(enable: boolean, ifNameOverride?: string): Promis
   } else if (plat === 'win32') {
     try {
       if (enable) {
-        execSync('netsh advfirewall firewall add rule name="SentinelKS" dir=out action=block', { stdio: 'ignore' })
-        execSync('netsh advfirewall firewall add rule name="SentinelKS-VPN" dir=out action=allow interface=any', { stdio: 'ignore' })
+        // Add rules (KillSwitch: block all, but allow VPN traffic)
+        execSync('netsh advfirewall firewall add rule name="SentinelKS" dir=out action=block & netsh advfirewall firewall add rule name="SentinelKS-VPN" dir=out action=allow interface=any', { stdio: 'ignore' })
       } else {
-        execSync('netsh advfirewall firewall delete rule name="SentinelKS"', { stdio: 'ignore' })
-        execSync('netsh advfirewall firewall delete rule name="SentinelKS-VPN"', { stdio: 'ignore' })
+        // Delete rules silently
+        execSync('netsh advfirewall firewall delete rule name="SentinelKS" & netsh advfirewall firewall delete rule name="SentinelKS-VPN" & exit 0', { stdio: 'ignore' })
       }
     } catch (e) { console.warn(`[KillSwitch] Windows Firewall failed`, e) }
   }
