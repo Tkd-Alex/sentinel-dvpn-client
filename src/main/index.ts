@@ -808,7 +808,7 @@ async function applyKillSwitch(enable: boolean, ifNameOverride?: string): Promis
 function execPrivileged(cmds: string[]): { code: number; stdout: string; stderr: string } {
   const plat = process.platform
   const fullCmd = cmds.join(' && ')
-  console.log(`[ExecPrivileged] Platform: ${plat}, Command: ${fullCmd}`)
+  console.log(`[ExecPrivileged] Platform: ${plat}, Commands count: ${cmds.length}`)
 
   try {
     if (plat === 'darwin') {
@@ -816,11 +816,32 @@ function execPrivileged(cmds: string[]): { code: number; stdout: string; stderr:
       const stdout = execSync(osaCmd).toString()
       return { code: 0, stdout, stderr: '' }
     } else if (plat === 'win32') {
-      // Use powershell Start-Process with -Verb RunAs to trigger UAC elevation prompt
-      const escapedCmd = fullCmd.replace(/"/g, '""')
-      const psCmd = `powershell -Command "Start-Process cmd -ArgumentList '/c ${escapedCmd}' -Verb RunAs -Wait"`
-      const stdout = execSync(psCmd).toString()
-      return { code: 0, stdout, stderr: '' }
+      const tmpDir = app.getPath('temp')
+      const batchPath = path.join(tmpDir, `sentinel-priv-${crypto.randomBytes(4).toString('hex')}.bat`)
+      const logPath = path.join(tmpDir, `sentinel-priv-${crypto.randomBytes(4).toString('hex')}.log`)
+
+      // Create batch file content with error checking between commands
+      const batchLines = ['@echo off', 'chcp 65001 > nul']
+      for (const cmd of cmds) {
+        batchLines.push(cmd)
+        batchLines.push('if %errorlevel% neq 0 exit /b %errorlevel%')
+      }
+      fs.writeFileSync(batchPath, batchLines.join('\r\n'), { encoding: 'utf8' })
+
+      try {
+        // Execute the batch file via PowerShell with UAC elevation.
+        // We redirect output to a log file within the elevated context.
+        const psCmd = `powershell -Command "$p = Start-Process cmd -ArgumentList '/c \"\"${batchPath}\"\" > \"\"${logPath}\"\" 2>&1' -Verb RunAs -PassThru -Wait; exit $p.ExitCode"`
+        execSync(psCmd)
+
+        const output = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : ''
+        try { fs.unlinkSync(batchPath); fs.unlinkSync(logPath) } catch {}
+        return { code: 0, stdout: output, stderr: '' }
+      } catch (e: any) {
+        const output = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : ''
+        try { fs.unlinkSync(batchPath); fs.unlinkSync(logPath) } catch {}
+        return { code: e.status || 1, stdout: '', stderr: output || e.message }
+      }
     } else {
       const bin = ['pkexec', 'gksudo', 'kdesudo', 'sudo'].find(b => {
         try { execSync(`which ${b}`, { stdio: 'ignore' }); return true } catch { return false }
@@ -895,7 +916,8 @@ async function wgQuickDown(configFile: string): Promise<void> {
     if (plat === 'win32') {
       const info = checkBinaries()
       const exe = info.wgPath || 'wireguard.exe'
-      spawnSync(exe, ['/uninstalltunnelservice', ifName], { stdio: 'ignore' })
+      // Use execPrivileged to trigger UAC elevation for uninstallation
+      execPrivileged([`"${exe}" /uninstalltunnelservice ${ifName}`])
     } else {
       try { execSync(`ip link show ${ifName}`, { stdio: 'ignore' }) } catch { return }
       execPrivileged([`wg-quick down "${configFile}"`])
