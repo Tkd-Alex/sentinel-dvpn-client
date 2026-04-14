@@ -613,6 +613,7 @@ async function setupTransparentV2Ray(v2ray: V2Ray): Promise<{ success: boolean; 
       activeTunInterface = 'sentinel-tun'
       const binaries = checkBinaries()
       const exe = binaries.tun2socksPath || 'tun2socks.exe'
+      const tunLog = path.join(app.getPath('temp'), 'sentinel-tun2socks.log')
 
       // 1. Get the real default gateway on Windows
       let gateway = '0.0.0.0'
@@ -620,28 +621,31 @@ async function setupTransparentV2Ray(v2ray: V2Ray): Promise<{ success: boolean; 
         const routeOut = execSync('route print 0.0.0.0').toString()
         const match = routeOut.match(/0\.0\.0\.0\s+0\.0\.0\.0\s+(\d+\.\d+\.\d+\.\d+)/)
         if (match) gateway = match[1]
-      } catch (e) { console.warn('[Transparent] Failed to detect gateway, using 0.0.0.0', e) }
+      } catch (e) { console.warn('[Transparent] Failed to detect gateway', e) }
+
+      // 2. All-in-one privileged script for Windows
+      const setupCmds = [
+        `route add ${serverIp} mask 255.255.255.255 ${gateway} METRIC 1`,
+        // Start tun2socks in background (elevated) and redirect its output to a log
+        `start /b "" "${exe}" -device ${activeTunInterface} -proxy socks5://127.0.0.1:${socksPort} > "${tunLog}" 2>&1`,
+        // Wait for wintun interface to be created
+        `timeout /t 3 /nobreak`,
+        `netsh interface ipv4 set address name="${activeTunInterface}" source=static addr=10.0.0.1 mask=255.255.255.0`,
+        `netsh interface ipv4 set dnsservers name="${activeTunInterface}" static address=1.1.1.1 register=none validate=no`,
+        `route add 0.0.0.0 mask 128.0.0.0 10.0.0.1 METRIC 5`,
+        `route add 128.0.0.0 mask 128.0.0.0 10.0.0.1 METRIC 5`
+      ]
 
       try {
-        // 2. Add route for the VPN server IP FIRST (requires UAC)
-        const res1 = execPrivileged([`route add ${serverIp} mask 255.255.255.255 ${gateway} METRIC 1`])
-        if (res1.code !== 0) throw new Error(res1.stderr)
-
-        // 3. Spawn tun2socks (this creates the interface)
-        activeTun2Socks = spawn(exe, ['-device', activeTunInterface, '-proxy', `socks5://127.0.0.1:${socksPort}`])
-        
-        // Wait for interface creation
-        await new Promise(r => setTimeout(r, 2000))
-
-        // 4. Configure the interface and global routes (requires UAC again)
-        const res2 = execPrivileged([
-          `netsh interface ipv4 set address name="${activeTunInterface}" source=static addr=10.0.0.1 mask=255.255.255.0 gateway=none`,
-          `netsh interface ipv4 set dnsservers name="${activeTunInterface}" static address=1.1.1.1 register=none validate=no`,
-          `route add 0.0.0.0 mask 128.0.0.0 10.0.0.1 METRIC 5`,
-          `route add 128.0.0.0 mask 128.0.0.0 10.0.0.1 METRIC 5`
-        ])
-        if (res2.code !== 0) throw new Error(res2.stderr)
-
+        const res = execPrivileged(setupCmds)
+        if (res.code !== 0) {
+          // If setup failed, check if tun2socks log exists to see why
+          const tunError = fs.existsSync(tunLog) ? fs.readFileSync(tunLog, 'utf8') : ''
+          throw new Error(res.stderr + (tunError ? `\nTun2Socks Log: ${tunError}` : ''))
+        }
+        // In this mode, tun2socks is managed by the OS since it was 'started' elevated
+        // We'll still mark it as 'active' for the UI and use taskkill to stop it later
+        activeTun2Socks = { pid: 0, kill: () => { try { execSync('taskkill /f /im tun2socks.exe', { stdio: 'ignore' }) } catch {} } } as any
       } catch (e: any) {
         throw new Error(`Windows network setup failed: ${e.message}`)
       }
@@ -859,35 +863,31 @@ function execPrivileged(cmds: string[]): { code: number; stdout: string; stderr:
       return { code: 0, stdout, stderr: '' }
     } else if (plat === 'win32') {
       const tmpDir = app.getPath('temp')
-      const batchPath = path.join(tmpDir, `sentinel-priv-${crypto.randomBytes(4).toString('hex')}.bat`)
+      const psPath = path.join(tmpDir, `sentinel-priv-${crypto.randomBytes(4).toString('hex')}.ps1`)
       const logPath = path.join(tmpDir, `sentinel-priv-${crypto.randomBytes(4).toString('hex')}.log`)
 
-      // Simplified batch: no more ( ) blocks, redirect each command individually
-      const batchLines = [
-        '@echo off',
-        'chcp 65001 > nul',
-        `echo [START] > "${logPath}"`
+      // Create PowerShell script content. Much more robust than Batch.
+      const psLines = [
+        `$ErrorActionPreference = "Continue"`,
+        `Start-Transcript -Path "${logPath}" -Force`,
+        ...cmds.map(c => `Write-Host "[EXEC] ${c.replace(/"/g, '`\"')}"; cmd /c "${c.replace(/"/g, '`\"')}"`),
+        `Stop-Transcript`
       ]
-      for (const cmd of cmds) {
-        batchLines.push(`echo [EXEC] ${cmd.replace(/"/g, '')} >> "${logPath}" 2>&1`)
-        batchLines.push(`${cmd} >> "${logPath}" 2>&1`)
-        batchLines.push(`if %errorlevel% neq 0 exit /b %errorlevel%`)
-      }
-      batchLines.push('exit /b 0')
-      fs.writeFileSync(batchPath, batchLines.join('\r\n'), { encoding: 'utf8' })
+      fs.writeFileSync(psPath, psLines.join('\r\n'), { encoding: 'utf8' })
 
       try {
-        const psCmd = `powershell -Command "$p = Start-Process cmd -ArgumentList '/c \"\"${batchPath}\"\"' -Verb RunAs -PassThru -Wait; exit $p.ExitCode"`
+        // Execute the PS1 script via PowerShell with UAC elevation.
+        const psCmd = `powershell -Command "Start-Process powershell -ArgumentList '-ExecutionPolicy Bypass -File \"\"${psPath}\"\"' -Verb RunAs -Wait -WindowStyle Hidden"`
         execSync(psCmd)
 
         const output = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : ''
-        try { fs.unlinkSync(batchPath); fs.unlinkSync(logPath) } catch {}
+        try { fs.unlinkSync(psPath); fs.unlinkSync(logPath) } catch {}
         return { code: 0, stdout: output, stderr: '' }
       } catch (e: any) {
         const output = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : ''
-        console.error(`[ExecPrivileged] Failed. Log preserved at: ${logPath}`)
+        console.error(`[ExecPrivileged] Failed. Log: ${logPath}`)
         console.error(`[ExecPrivileged] Output:\n${output}`)
-        try { fs.unlinkSync(batchPath) } catch {} 
+        try { fs.unlinkSync(psPath) } catch {} 
         return { code: e.status || 1, stdout: '', stderr: output || e.message }
       }
     } else {      const bin = ['pkexec', 'gksudo', 'kdesudo', 'sudo'].find(b => {
