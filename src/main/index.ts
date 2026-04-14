@@ -628,12 +628,12 @@ async function setupTransparentV2Ray(v2ray: V2Ray): Promise<{ success: boolean; 
       const setupCmds = [
         `route add ${serverIp} mask 255.255.255.255 ${gateway} METRIC 1`,
         // Launch tun2socks asynchronously and redirect output. Use separate files to avoid handle locks.
-        `$p = Start-Process -FilePath "${exe}" -ArgumentList "-device", "tun://${activeTunInterface}", "-proxy", "socks5://127.0.0.1:${socksPort}" -RedirectStandardOutput "${tunLog}.stdout.log" -RedirectStandardError "${tunLog}.stderr.log" -WindowStyle Hidden -PassThru`,
+        `$p = Start-Process -FilePath "${exe}" -ArgumentList "-device tun://${activeTunInterface} -proxy socks5://127.0.0.1:${socksPort}" -RedirectStandardOutput "${tunLog}.stdout.log" -RedirectStandardError "${tunLog}.stderr.log" -WindowStyle Hidden -PassThru`,
         `$p.Id | Out-File -FilePath "${path.join(tmpDir, 'tun.pid')}" -Encoding utf8`,
         // Wait loop for interface to appear (max 20s)
         `for ($i=0; $i -lt 20; $i++) { if (Get-NetAdapter -Name "${activeTunInterface}" -ErrorAction SilentlyContinue) { break }; Start-Sleep -Seconds 1 }`,
         `$ifIdx = (Get-NetIPInterface -InterfaceAlias "${activeTunInterface}" -AddressFamily IPv4).InterfaceIndex`,
-        `netsh interface ipv4 set address name="${activeTunInterface}" source=static addr=10.0.0.1 mask=255.255.255.0 gateway=none`,
+        `netsh interface ipv4 set address name="${activeTunInterface}" static 10.0.0.1 255.255.255.0 none`,
         `netsh interface ipv4 set dnsservers name="${activeTunInterface}" static address=1.1.1.1 register=none validate=no`,
         // Use a very low METRIC (2) so it takes precedence over the physical interface
         `route add 0.0.0.0 mask 128.0.0.0 10.0.0.1 METRIC 2 IF $ifIdx`,
@@ -879,13 +879,16 @@ async function execPrivileged(cmds: string[]): Promise<{ code: number; stdout: s
     })
   } else if (plat === 'win32') {
     const tmpDir = app.getPath('temp')
-    const psPath = path.join(tmpDir, `sentinel-priv-${crypto.randomBytes(4).toString('hex')}.ps1`)
-    const logPath = path.join(tmpDir, `sentinel-priv-${crypto.randomBytes(4).toString('hex')}.log`)
+    const reqId = crypto.randomBytes(4).toString('hex')
+    const psPath = path.join(tmpDir, `sentinel-priv-${reqId}.ps1`)
+    const logPath = path.join(tmpDir, `sentinel-priv-${reqId}.log`)
 
-    // Create PowerShell script content. Native PS commands, no cmd /c wrapper.
+    // Robust PowerShell script: Detach background processes and exit clean
     const psLines = [
       `$ErrorActionPreference = "Continue"`,
-      ...cmds.map(c => `Write-Host "[EXEC] ${c.replace(/"/g, '`\"')}"; ${c} | Out-File -FilePath "${logPath}" -Append`),
+      `Start-Transcript -Path "${logPath}" -Force`,
+      ...cmds.map(c => `Write-Output '[EXEC] ${c.replace(/'/g, "''")}'; ${c}`),
+      `Stop-Transcript`
     ]
     fs.writeFileSync(psPath, psLines.join('\r\n'), { encoding: 'utf8' })
 
@@ -899,8 +902,8 @@ async function execPrivileged(cmds: string[]): Promise<{ code: number; stdout: s
       exec(psCmd, (error: any) => {
         const output = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : ''
         if (error) {
-          console.error(`[ExecPrivileged] Failed. Log: ${logPath}`)
-          try { fs.unlinkSync(psPath) } catch {}
+          console.error(`[ExecPrivileged] Script failed. Log: ${logPath}`)
+          // Do not delete logs on error to allow for debugging
           res({ code: error.code || 1, stdout: '', stderr: output || error.message })
         } else {
           try { fs.unlinkSync(psPath); fs.unlinkSync(logPath) } catch {}
@@ -1135,12 +1138,13 @@ async function killActiveConnections(sendEndSession = true) {
       ]
       try { await execPrivileged(cleanupCmds) } catch (e) { console.warn('macOS cleanup failed', e) }
     } else if (plat === 'win32') {
-      try { 
-        activeTun2Socks.kill()
-        execSync(`route delete 0.0.0.0 mask 128.0.0.0`, { stdio: 'ignore' })
-        execSync(`route delete 128.0.0.0 mask 128.0.0.0`, { stdio: 'ignore' })
-        if (activeV2RayServerIp) execSync(`route delete ${activeV2RayServerIp}`, { stdio: 'ignore' })
-      } catch (e) { console.warn('Windows cleanup failed', e) }
+      try { activeTun2Socks.kill() } catch {}
+      const cleanupCmds = [
+        `route delete 0.0.0.0 mask 128.0.0.0`,
+        `route delete 128.0.0.0 mask 128.0.0.0`
+      ]
+      if (activeV2RayServerIp) cleanupCmds.push(`route delete ${activeV2RayServerIp}`)
+      try { await execPrivileged(cleanupCmds) } catch (e) { console.warn('Windows cleanup failed', e) }
     } else { activeTun2Socks.kill() }
     activeTun2Socks = null; activeTunInterface = null; activeV2RayServerIp = null
   }
