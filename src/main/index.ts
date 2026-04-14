@@ -937,7 +937,18 @@ function withTimeout<T>(promise: Promise<T> | undefined, ms: number, msg: string
 
 function checkBinaries() {
   const getHash = (p: string) => { try { const data = fs.readFileSync(p); return crypto.createHash('sha256').update(data).digest('hex') } catch { return null } }
-  const find = (n: string) => { try { const cmd = process.platform === 'win32' ? `where ${n}` : `which ${n}`; return execSync(cmd, { stdio: 'pipe' }).toString().trim().split('\n')[0] } catch { return null } }
+  const find = (n: string) => { 
+    try { 
+      const cmd = process.platform === 'win32' ? `where ${n}` : `which ${n}`; 
+      return execSync(cmd, { stdio: 'pipe' }).toString().trim().split('\n')[0] 
+    } catch { 
+      if (process.platform === 'win32' && n === 'wireguard.exe') {
+        const standardPath = 'C:\\Program Files\\WireGuard\\wireguard.exe'
+        if (fs.existsSync(standardPath)) return standardPath
+      }
+      return null 
+    } 
+  }
   const getDistro = () => { if (process.platform !== 'linux') return process.platform; try { const content = fs.readFileSync('/etc/os-release', 'utf8').toLowerCase(); if (content.includes('id=arch') || content.includes('id_like=arch')) return 'arch'; if (content.includes('id=ubuntu') || content.includes('id=debian') || content.includes('id_like=debian')) return 'debian'; if (content.includes('id=fedora') || content.includes('id=rhel') || content.includes('id_like=fedora')) return 'fedora'; if (content.includes('id=suse') || content.includes('id_like=suse')) return 'suse' } catch { } return 'linux' }
   const wgName = process.platform === 'win32' ? 'wireguard.exe' : 'wg-quick'; const v2Path = find('v2ray'); const wgPath = find(wgName); const t2sPath = find('tun2socks')
   return { wireguard: !!wgPath, wgPath, wgHash: wgPath ? getHash(wgPath) : null, v2ray: !!v2Path, v2rayPath: v2Path, v2rayHash: v2Path ? getHash(v2Path) : null, tun2socks: !!t2sPath, tun2socksPath: t2sPath, tun2socksHash: t2sPath ? getHash(t2sPath) : null, platform: process.platform, distro: getDistro() }
