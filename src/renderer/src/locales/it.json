@@ -304,6 +304,7 @@
       "wireguard": "Richiesto per tunnel VPN ad alte prestazioni a livello kernel.",
       "v2ray": "Richiesto per connessioni proxy offuscate (VMess/VLess).",
       "tun2socks": "Richiesto per il supporto V2Ray a livello di sistema via interfaccia TUN."
-    }
+    },
+    "wintun_missing": "Requisito Windows: posiziona 'wintun.dll' nella stessa cartella di tun2socks.exe."
   }
 }

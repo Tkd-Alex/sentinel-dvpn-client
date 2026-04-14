@@ -304,6 +304,7 @@
       "wireguard": "Required for high-performance kernel-level VPN tunnels.",
       "v2ray": "Required for obfuscated proxy connections (VMess/VLess).",
       "tun2socks": "Required for system-wide V2Ray support via TUN interface."
-    }
+    },
+    "wintun_missing": "Windows requirement: Place 'wintun.dll' in the same folder as tun2socks.exe."
   }
 }
