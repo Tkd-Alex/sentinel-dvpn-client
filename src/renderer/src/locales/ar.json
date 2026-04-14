@@ -31,7 +31,8 @@
     "verified": "مؤكد",
     "missing": "مفقود",
     "checking": "جاري الفحص...",
-    "exec": "تنفيذ"
+    "exec": "تنفيذ",
+    "browse": "تصفح"
   },
   "tabs": {
     "globe": "الخريطة",

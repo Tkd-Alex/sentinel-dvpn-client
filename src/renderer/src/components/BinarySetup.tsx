@@ -112,6 +112,14 @@ export default function BinarySetup({ status, onDismiss, onRecheck }: Props) {
     setChecking(true); try { const fresh = await onRecheck(); setCurrent(fresh) } finally { setChecking(false) }
   }
 
+  async function handleBrowse(id: string) {
+    const name = id === 'wireguard' ? 'wireguard.exe' : id === 'v2ray' ? 'v2ray.exe' : 'tun2socks.exe'
+    const res = await (window.api as any).browseBinary(name)
+    if (res.success) {
+      handleRecheck()
+    }
+  }
+
   async function handleExec(cmd: string) {
     const res = await (window.api as any).installBinary(cmd)
     if (res.success) {
@@ -174,7 +182,14 @@ export default function BinarySetup({ status, onDismiss, onRecheck }: Props) {
                     <div style={{ marginTop: 12 }}>
                       <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 12, lineHeight: 1.6 }}>{g.why}</div>
                       {current.platform === 'win32' ? (
-                        <a href={g.windows} target="_blank" rel="noreferrer" className="btn btn-primary btn-sm btn-full">{t('binary.download_windows')}</a>
+                        <div style={{ display: 'flex', gap: 10 }}>
+                          <a href={g.windows} target="_blank" rel="noreferrer" className="btn btn-primary btn-sm" style={{ flex: 1, textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            {t('binary.download_windows')}
+                          </a>
+                          <button className="btn btn-secondary btn-sm" style={{ flex: 1 }} onClick={() => handleBrowse(g.id)}>
+                            📂 {t('common.browse')}
+                          </button>
+                        </div>
                       ) : (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                           {getFilteredSteps(g).map((step, i) => (

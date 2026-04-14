@@ -31,7 +31,8 @@
     "verified": "已验证",
     "missing": "缺失",
     "checking": "正在检查...",
-    "exec": "执行"
+    "exec": "执行",
+    "browse": "浏览"
   },
   "tabs": {
     "globe": "地球",
