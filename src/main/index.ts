@@ -705,7 +705,9 @@ async function doHandshake(nodeAddress: string, sessionId: Long) {
 
     if (nInfo.service_type === NodeVPNType.V2RAY) {
       if (activeV2Ray) { try { activeV2Ray.disconnect() } catch (_) {}; activeV2Ray = null }
-      const v2ray = new V2Ray(); const result = await handshake(sessionId, { uuid: v2ray.getKey() }, walletState.privkey!, remoteAddr).catch(e => { throw new Error(`[handshake] ${extractError(e)}`) })
+      const binaries = checkBinaries()
+      const v2ray = new V2Ray(binaries.v2rayPath || undefined)
+      const result = await handshake(sessionId, { uuid: v2ray.getKey() }, walletState.privkey!, remoteAddr).catch(e => { throw new Error(`[handshake] ${extractError(e)}`) })
       const hd = JSON.parse(Buffer.from(result.data, 'base64').toString('utf8')); await v2ray.parseConfig(hd, result.addrs)
       const shareLinks = v2ray.buildShareLinks(`sentinel-${nodeAddress.slice(-8)}`)
       const qrCodes = await Promise.all(shareLinks.map(link => QRCode.toDataURL(link, { width: 280, margin: 1, color: { dark: '#34d399', light: '#060810' } })))
