@@ -626,26 +626,39 @@ async function setupTransparentV2Ray(v2ray: V2Ray): Promise<{ success: boolean; 
       // 2. All-in-one privileged PowerShell script for Windows
       const setupCmds = [
         `route add ${serverIp} mask 255.255.255.255 ${gateway} METRIC 1`,
-        // Launch tun2socks asynchronously and redirect output
-        `Start-Process -FilePath "${exe}" -ArgumentList "-device ${activeTunInterface}", "-proxy socks5://127.0.0.1:${socksPort}" -RedirectStandardOutput "${tunLog}" -RedirectStandardError "${tunLog}" -WindowStyle Hidden`,
+        // Launch tun2socks and capture the object to get the PID
+        `$p = Start-Process -FilePath "${exe}" -ArgumentList "-device ${activeTunInterface}", "-proxy socks5://127.0.0.1:${socksPort}" -RedirectStandardOutput "${tunLog}" -RedirectStandardError "${tunLog}" -WindowStyle Hidden -PassThru`,
+        `$p.Id | Out-File -FilePath "${path.join(tmpDir, 'tun.pid')}" -Encoding utf8`,
         // Wait loop for interface to appear
         `for ($i=0; $i -lt 20; $i++) { if (Get-NetAdapter -Name "${activeTunInterface}" -ErrorAction SilentlyContinue) { break }; Start-Sleep -Seconds 1 }`,
+        `$ifIdx = (Get-NetIPInterface -InterfaceAlias "${activeTunInterface}" -AddressFamily IPv4).InterfaceIndex`,
         `netsh interface ipv4 set address name="${activeTunInterface}" source=static addr=10.0.0.1 mask=255.255.255.0 gateway=none`,
         `netsh interface ipv4 set dnsservers name="${activeTunInterface}" static address=1.1.1.1 register=none validate=no`,
-        `route add 0.0.0.0 mask 128.0.0.0 10.0.0.1 METRIC 5`,
-        `route add 128.0.0.0 mask 128.0.0.0 10.0.0.1 METRIC 5`
+        // Use a very low METRIC (2) so it takes precedence over the physical interface (usually 15-25)
+        // Also specify the interface index (IF $ifIdx) to avoid routing ambiguity
+        `route add 0.0.0.0 mask 128.0.0.0 10.0.0.1 METRIC 2 IF $ifIdx`,
+        `route add 128.0.0.0 mask 128.0.0.0 10.0.0.1 METRIC 2 IF $ifIdx`
       ]
 
       try {
         const res = execPrivileged(setupCmds)
         if (res.code !== 0) {
-          // If setup failed, check if tun2socks log exists to see why
           const tunError = fs.existsSync(tunLog) ? fs.readFileSync(tunLog, 'utf8') : ''
           throw new Error(res.stderr + (tunError ? `\nTun2Socks Log: ${tunError}` : ''))
         }
-        // In this mode, tun2socks is managed by the OS since it was 'started' elevated
-        // We'll still mark it as 'active' for the UI and use taskkill to stop it later
-        activeTun2Socks = { pid: 0, kill: () => { try { execSync('taskkill /f /im tun2socks.exe', { stdio: 'ignore' }) } catch {} } } as any
+        
+        // Read the PID from the temporary file
+        let realPid = 0
+        const pidFile = path.join(tmpDir, 'tun.pid')
+        if (fs.existsSync(pidFile)) {
+          realPid = parseInt(fs.readFileSync(pidFile, 'utf8').trim()) || 0
+          try { fs.unlinkSync(pidFile) } catch {}
+        }
+
+        activeTun2Socks = { 
+          pid: realPid, 
+          kill: () => { try { execSync('taskkill /f /im tun2socks.exe', { stdio: 'ignore' }) } catch {} } 
+        } as any
       } catch (e: any) {
         throw new Error(`Windows network setup failed: ${e.message}`)
       }
