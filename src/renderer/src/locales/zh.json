@@ -303,7 +303,8 @@
     "why": {
       "wireguard": "高性能内核级 VPN 隧道所需。",
       "v2ray": "混淆代理连接 (VMess/VLess) 所需。",
-      "tun2socks": "通过 TUN 接口支持系统级 V2Ray 所需。"
-    }
+      "tun2socks": "通过 TUN 接口支持 system-wide V2Ray 所需。"
+    },
+    "wintun_missing": "Windows 要求：请将 'wintun.dll' 放在 tun2socks.exe 所在的文件夹中。"
   }
 }

@@ -187,7 +187,18 @@ export default function BinarySetup({ status, onDismiss, onRecheck, embedded = f
                 </button>
                 {expanded === g.id && (
                   <div style={{ marginTop: 12 }}>
-                    <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 12, lineHeight: 1.6 }}>{g.why}</div>
+                    <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 12, lineHeight: 1.6 }}>
+                      {g.why}
+                      {g.id === 'tun2socks' && current.platform === 'win32' && (
+                        <div style={{ marginTop: 8, color: 'var(--orange)', fontWeight: 600 }}>
+                          ⚠ {t('binary.wintun_missing')}
+                          <br />
+                          <a href="https://www.wintun.net/" target="_blank" rel="noreferrer" style={{ color: 'var(--cyan)', fontSize: 10, textDecoration: 'underline' }}>
+                            https://www.wintun.net/
+                          </a>
+                        </div>
+                      )}
+                    </div>
                     {current.platform === 'win32' ? (
                       <div style={{ display: 'flex', gap: 10 }}>
                         <a href={g.windows} target="_blank" rel="noreferrer" className="btn btn-primary btn-sm" style={{ flex: 1, textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
