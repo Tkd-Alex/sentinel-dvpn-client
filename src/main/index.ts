@@ -612,7 +612,9 @@ async function setupTransparentV2Ray(v2ray: V2Ray): Promise<{ success: boolean; 
     } else if (plat === 'win32') {
       activeTunInterface = 'sentinel-tun'
       execSync(`route add ${serverIp} mask 255.255.255.255 0.0.0.0 METRIC 1`, { stdio: 'ignore' })
-      activeTun2Socks = spawn('tun2socks.exe', ['-device', activeTunInterface, '-proxy', `socks5://127.0.0.1:${socksPort}`])
+      const binaries = checkBinaries()
+      const exe = binaries.tun2socksPath || 'tun2socks.exe'
+      activeTun2Socks = spawn(exe, ['-device', activeTunInterface, '-proxy', `socks5://127.0.0.1:${socksPort}`])
       await new Promise(r => setTimeout(r, 1000))
       execSync(`netsh interface ipv4 set address name="${activeTunInterface}" source=static addr=10.0.0.1 mask=255.255.255.0 gateway=none`, { stdio: 'ignore' })
       execSync(`route add 0.0.0.0 mask 128.0.0.0 10.0.0.1 METRIC 5`, { stdio: 'ignore' })
