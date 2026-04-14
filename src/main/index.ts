@@ -582,14 +582,14 @@ async function setupTransparentV2Ray(v2ray: V2Ray): Promise<{ success: boolean; 
       ]
 
       try {
-        execPrivileged(setupCmds)
+        await execPrivileged(setupCmds)
         const bin = findPrivEscBin()
         activeTun2Socks = spawn(bin === 'osascript' ? 'sudo' : bin, ['tun2socks', '-device', tunName, '-proxy', `socks5://127.0.0.1:${socksPort}`])
       } catch (e: any) {
         throw new Error(`System commands failed: ${e.message}`)
       }
       const settings = getSettings()
-      if (settings.killSwitch) applyKillSwitch(true, tunName).catch(() => {})
+      if (settings.killSwitch) await applyKillSwitch(true, tunName)
     } else if (plat === 'darwin') {
       const gateway = execSync("netstat -rn | grep 'default' | head -n1 | awk '{print $2}'").toString().trim()
       activeTunInterface = 'utun10'
@@ -600,7 +600,7 @@ async function setupTransparentV2Ray(v2ray: V2Ray): Promise<{ success: boolean; 
         `route add -net 128.0.0.0/1 -interface ${activeTunInterface}`
       ]
       try {
-        execPrivileged(setupCmds)
+        await execPrivileged(setupCmds)
         // Spawn tun2socks using sudo (osascript is only for shell strings, not for persistent spawns)
         // Since we just ran execPrivileged, the credentials might be cached in sudo
         activeTun2Socks = spawn('sudo', ['tun2socks', '-device', activeTunInterface, '-proxy', `socks5://127.0.0.1:${socksPort}`])
@@ -608,7 +608,7 @@ async function setupTransparentV2Ray(v2ray: V2Ray): Promise<{ success: boolean; 
         throw new Error(`macOS setup failed: ${e.message}`)
       }
       const settings = getSettings()
-      if (settings.killSwitch) applyKillSwitch(true, activeTunInterface).catch(() => {})
+      if (settings.killSwitch) await applyKillSwitch(true, activeTunInterface)
     } else if (plat === 'win32') {
       activeTunInterface = 'sentinel-tun'
       const binaries = checkBinaries()
@@ -627,10 +627,10 @@ async function setupTransparentV2Ray(v2ray: V2Ray): Promise<{ success: boolean; 
       // 2. All-in-one privileged PowerShell script for Windows
       const setupCmds = [
         `route add ${serverIp} mask 255.255.255.255 ${gateway} METRIC 1`,
-        // Launch tun2socks and capture the object to get the PID
-        `$p = Start-Process -FilePath "${exe}" -ArgumentList "-device", "tun://${activeTunInterface}", "-proxy", "socks5://127.0.0.1:${socksPort}" -RedirectStandardOutput "${tunLog}" -RedirectStandardError "${tunLog}" -WindowStyle Hidden -PassThru`,
+        // Launch tun2socks asynchronously and redirect output. Use separate files to avoid handle locks.
+        `$p = Start-Process -FilePath "${exe}" -ArgumentList "-device", "tun://${activeTunInterface}", "-proxy", "socks5://127.0.0.1:${socksPort}" -RedirectStandardOutput "${tunLog}.stdout.log" -RedirectStandardError "${tunLog}.stderr.log" -WindowStyle Hidden -PassThru`,
         `$p.Id | Out-File -FilePath "${path.join(tmpDir, 'tun.pid')}" -Encoding utf8`,
-        // Wait loop for interface to appear
+        // Wait loop for interface to appear (max 20s)
         `for ($i=0; $i -lt 20; $i++) { if (Get-NetAdapter -Name "${activeTunInterface}" -ErrorAction SilentlyContinue) { break }; Start-Sleep -Seconds 1 }`,
         `$ifIdx = (Get-NetIPInterface -InterfaceAlias "${activeTunInterface}" -AddressFamily IPv4).InterfaceIndex`,
         `netsh interface ipv4 set address name="${activeTunInterface}" source=static addr=10.0.0.1 mask=255.255.255.0 gateway=none`,
@@ -643,8 +643,8 @@ async function setupTransparentV2Ray(v2ray: V2Ray): Promise<{ success: boolean; 
       try {
         const res = await execPrivileged(setupCmds)
         if (res.code !== 0) {
-          const tunError = fs.existsSync(tunLog) ? fs.readFileSync(tunLog, 'utf8') : ''
-          throw new Error(res.stderr + (tunError ? `\nTun2Socks Log: ${tunError}` : ''))
+          const tunError = fs.existsSync(`${tunLog}.stderr.log`) ? fs.readFileSync(`${tunLog}.stderr.log`, 'utf8') : ''
+          throw new Error(res.stderr + (tunError ? `\nTun2Socks Error: ${tunError}` : ''))
         }
         
         // Read the PID from the temporary file
@@ -664,7 +664,7 @@ async function setupTransparentV2Ray(v2ray: V2Ray): Promise<{ success: boolean; 
       }
 
       const settings = getSettings()
-      if (settings.killSwitch) applyKillSwitch(true, activeTunInterface).catch(() => {})
+      if (settings.killSwitch) await applyKillSwitch(true, activeTunInterface)
     }
     return { success: true }
   } catch (err: any) { return { success: false, error: `Transparent setup failed: ${err.message}` } }
@@ -882,17 +882,20 @@ async function execPrivileged(cmds: string[]): Promise<{ code: number; stdout: s
     const psPath = path.join(tmpDir, `sentinel-priv-${crypto.randomBytes(4).toString('hex')}.ps1`)
     const logPath = path.join(tmpDir, `sentinel-priv-${crypto.randomBytes(4).toString('hex')}.log`)
 
+    // Create PowerShell script content. Native PS commands, no cmd /c wrapper.
     const psLines = [
       `$ErrorActionPreference = "Continue"`,
-      `Start-Transcript -Path "${logPath}" -Force`,
-      ...cmds.map(c => `Write-Host "[EXEC] ${c.replace(/"/g, '`\"')}"; ${c}`),
-      `Stop-Transcript`
+      ...cmds.map(c => `Write-Host "[EXEC] ${c.replace(/"/g, '`\"')}"; ${c} | Out-File -FilePath "${logPath}" -Append`),
     ]
     fs.writeFileSync(psPath, psLines.join('\r\n'), { encoding: 'utf8' })
 
+    // IMPORTANT: No -Wait here to avoid freezing if children stay alive, 
+    // but we use a small trick: Start-Process powershell -Wait ensures the SCRIPT finishes,
+    // while Start-Process inside the script (for tun2socks) will NOT have -Wait.
     const psCmd = `powershell -Command "Start-Process powershell -ArgumentList '-ExecutionPolicy Bypass -File \"\"${psPath}\"\"' -Verb RunAs -Wait -WindowStyle Hidden"`
-    
+
     return new Promise((res) => {
+      const { exec } = require('child_process')
       exec(psCmd, (error: any) => {
         const output = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : ''
         if (error) {
