@@ -1003,6 +1003,12 @@ function checkBinaries() {
     
     if (targetPath && fs.existsSync(targetPath)) {
       console.log(`[BinaryCheck] Using custom path for ${n}: ${targetPath}`)
+      // Robust fix: Add the directory of the custom binary to the PATH
+      const binDir = path.dirname(targetPath)
+      if (process.platform === 'win32' && !process.env.PATH?.includes(binDir)) {
+        process.env.PATH = `${binDir};${process.env.PATH}`
+        console.log(`[BinaryCheck] Added to PATH: ${binDir}`)
+      }
       return targetPath
     }
     try { 
