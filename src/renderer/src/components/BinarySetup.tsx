@@ -92,21 +92,23 @@ function ActionBtn({ code, onExec }: { code: string; onExec: (cmd: string) => vo
 
 interface Props {
   status:    BinaryStatus
-  onDismiss: () => void
+  onDismiss?: () => void
   onRecheck: () => Promise<BinaryStatus>
+  embedded?: boolean
 }
 
-export default function BinarySetup({ status, onDismiss, onRecheck }: Props) {
+export default function BinarySetup({ status, onDismiss, onRecheck, embedded = false }: Props) {
   const { t } = useTranslation()
   const [current, setCurrent]   = useState(status)
   const [checking, setChecking] = useState(false)
   const [expanded, setExpanded] = useState<string | null>(null)
 
   useEffect(() => {
-    const handleEsc = (e: KeyboardEvent) => { if (e.key === 'Escape') onDismiss() }
+    if (embedded) return
+    const handleEsc = (e: KeyboardEvent) => { if (e.key === 'Escape') onDismiss?.() }
     window.addEventListener('keydown', handleEsc)
     return () => window.removeEventListener('keydown', handleEsc)
-  }, [onDismiss])
+  }, [onDismiss, embedded])
 
   async function handleRecheck() {
     setChecking(true); try { const fresh = await onRecheck(); setCurrent(fresh) } finally { setChecking(false) }
@@ -140,84 +142,98 @@ export default function BinarySetup({ status, onDismiss, onRecheck }: Props) {
   }
 
   const guides = GUIDES(current, t).filter(g => !g.found)
+  
+  const content = (
+    <div className={embedded ? "binary-check-embedded" : "binary-check-card"} style={embedded ? {} : { maxWidth: 700 }}>
+      {!embedded && <button className="modal-close" style={{ position: 'absolute', top: 20, right: 20 }} onClick={onDismiss}>✕</button>}
+
+      <div className="binary-check-header">
+        <div className="binary-check-icon">{guides.length > 0 ? '⚠' : '✓'}</div>
+        <div>
+          <div className="binary-check-title">{t('binary.integrity_check')}</div>
+          <div className="binary-check-sub">{t('binary.env_check', { distro: current.distro.toUpperCase() })}</div>
+        </div>
+      </div>
+
+      <div className="binary-status-list">
+        {GUIDES(current, t).map(g => (
+          <div key={g.id} className={`binary-row ${g.found ? 'ok' : 'missing'}`} style={{ flexDirection: 'column', alignItems: 'stretch', gap: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <span className="binary-icon" style={{ fontSize: 18 }}>{g.icon}</span>
+              <div style={{ flex: 1 }}>
+                <div className="binary-name">{g.name}</div>
+                {g.found ? (
+                  <div style={{ fontSize: 9, color: 'var(--text-3)', marginTop: 2, fontFamily: 'var(--font-mono)', wordBreak: 'break-all' }}>
+                    PATH: {g.path}
+                  </div>
+                ) : (
+                  <div className="binary-path">{t('binary.not_found')}</div>
+                )}
+              </div>
+              <span className={`tag ${g.found ? 'tag-green' : 'tag-red'}`}>{g.found ? t('common.verified') : t('common.missing')}</span>
+            </div>
+
+            {!g.found && (
+              <div style={{ borderTop: '1px solid var(--border)', paddingTop: 8 }}>
+                <button className="btn btn-secondary btn-sm btn-full" onClick={() => setExpanded(expanded === g.id ? null : g.id)}>
+                  {expanded === g.id ? `▲ ${t('binary.hide_guide')}` : `▼ ${t('binary.view_guide')}`}
+                </button>
+                {expanded === g.id && (
+                  <div style={{ marginTop: 12 }}>
+                    <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 12, lineHeight: 1.6 }}>{g.why}</div>
+                    {current.platform === 'win32' ? (
+                      <div style={{ display: 'flex', gap: 10 }}>
+                        <a href={g.windows} target="_blank" rel="noreferrer" className="btn btn-primary btn-sm" style={{ flex: 1, textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                          {t('binary.download_windows')}
+                        </a>
+                        <button className="btn btn-secondary btn-sm" style={{ flex: 1 }} onClick={() => handleBrowse(g.id)}>
+                          📂 {t('common.browse')}
+                        </button>
+                      </div>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                        {getFilteredSteps(g).map((step, i) => (
+                          <div key={i} style={{ background: 'var(--bg-0)', padding: 10, borderRadius: 4, border: '1px solid var(--border)' }}>
+                            <div style={{ fontSize: 9, color: 'var(--text-3)', marginBottom: 6, textTransform: 'uppercase' }}>{step.label}</div>
+                            <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                              <code style={{ flex: 1, fontSize: 10, color: 'var(--cyan)' }}>{step.code}</code>
+                              <ActionBtn code={step.code} onExec={handleExec} />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+            
+            {/* Embedded mode always allows browsing even if found */}
+            {embedded && g.found && (
+               <button className="btn btn-secondary btn-xs" style={{ alignSelf: 'flex-start', marginTop: -4 }} onClick={() => handleBrowse(g.id)}>
+                 {t('common.browse')} (Change)
+               </button>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
+        <button className="btn btn-secondary btn-sm" disabled={checking} onClick={handleRecheck}>
+          {checking ? t('common.checking') : `↻ ${t('filters.reset')}`}
+        </button>
+        {!embedded && <button className="btn btn-primary" style={{ flex: 1 }} onClick={onDismiss}>{t('binary.ignore_continue')}</button>}
+      </div>
+    </div>
+  )
+
+  if (embedded) return content
+
   if (guides.length === 0) return null
 
   return (
-    <div className="binary-check-overlay" onClick={e => e.target === e.currentTarget && onDismiss()}>
-      <div className="binary-check-card" style={{ maxWidth: 700 }}>
-        <button className="modal-close" style={{ position: 'absolute', top: 20, right: 20 }} onClick={onDismiss}>✕</button>
-
-        <div className="binary-check-header">
-          <div className="binary-check-icon">⚠</div>
-          <div>
-            <div className="binary-check-title">{t('binary.integrity_check')}</div>
-            <div className="binary-check-sub">{t('binary.env_check', { distro: current.distro.toUpperCase() })}</div>
-          </div>
-        </div>
-
-        <div className="binary-status-list">
-          {GUIDES(current, t).map(g => (
-            <div key={g.id} className={`binary-row ${g.found ? 'ok' : 'missing'}`} style={{ flexDirection: 'column', alignItems: 'stretch', gap: 10 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <span className="binary-icon" style={{ fontSize: 18 }}>{g.icon}</span>
-                <div style={{ flex: 1 }}>
-                  <div className="binary-name">{g.name}</div>
-                  {g.found ? (
-                    <div style={{ fontSize: 9, color: 'var(--text-3)', marginTop: 2, fontFamily: 'var(--font-mono)' }}>
-                      PATH: {g.path}<br/>HASH: {g.hash?.slice(0, 32)}…
-                    </div>
-                  ) : (
-                    <div className="binary-path">{t('binary.not_found')}</div>
-                  )}
-                </div>
-                <span className={`tag ${g.found ? 'tag-green' : 'tag-red'}`}>{g.found ? t('common.verified') : t('common.missing')}</span>
-              </div>
-
-              {!g.found && (
-                <div style={{ borderTop: '1px solid var(--border)', paddingTop: 8 }}>
-                  <button className="btn btn-secondary btn-sm btn-full" onClick={() => setExpanded(expanded === g.id ? null : g.id)}>
-                    {expanded === g.id ? `▲ ${t('binary.hide_guide')}` : `▼ ${t('binary.view_guide')}`}
-                  </button>
-                  {expanded === g.id && (
-                    <div style={{ marginTop: 12 }}>
-                      <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 12, lineHeight: 1.6 }}>{g.why}</div>
-                      {current.platform === 'win32' ? (
-                        <div style={{ display: 'flex', gap: 10 }}>
-                          <a href={g.windows} target="_blank" rel="noreferrer" className="btn btn-primary btn-sm" style={{ flex: 1, textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                            {t('binary.download_windows')}
-                          </a>
-                          <button className="btn btn-secondary btn-sm" style={{ flex: 1 }} onClick={() => handleBrowse(g.id)}>
-                            📂 {t('common.browse')}
-                          </button>
-                        </div>
-                      ) : (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                          {getFilteredSteps(g).map((step, i) => (
-                            <div key={i} style={{ background: 'var(--bg-0)', padding: 10, borderRadius: 4, border: '1px solid var(--border)' }}>
-                              <div style={{ fontSize: 9, color: 'var(--text-3)', marginBottom: 6, textTransform: 'uppercase' }}>{step.label}</div>
-                              <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-                                <code style={{ flex: 1, fontSize: 10, color: 'var(--cyan)' }}>{step.code}</code>
-                                <ActionBtn code={step.code} onExec={handleExec} />
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-
-        <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
-          <button className="btn btn-secondary btn-sm" disabled={checking} onClick={handleRecheck}>
-            {checking ? t('common.checking') : `↻ ${t('filters.reset')}`}
-          </button>
-          <button className="btn btn-primary" style={{ flex: 1 }} onClick={onDismiss}>{t('binary.ignore_continue')}</button>
-        </div>
-      </div>
+    <div className="binary-check-overlay" onClick={e => e.target === e.currentTarget && onDismiss?.()}>
+      {content}
     </div>
   )
 }
