@@ -191,6 +191,7 @@
     "st_sub": "Only route specified subnets through VPN. WireGuard only — replaces AllowedIPs = 0.0.0.0/0 with your routes.",
     "st_routes_label": "Routed CIDRs (comma-separated)",
     "st_routes_hint": "Default routes exclude RFC-1918 local ranges. Reconnect to apply. To add the entire internet: add 0.0.0.0/0 (same as off).",
+    "binaries_title": "VPN Binaries Management",
     "about_title": "About",
     "about_footer": "Mnemonic encrypted via OS keychain (Electron safeStorage). Private key never leaves the main process. All node API calls are proxied through the Electron main process."
   },

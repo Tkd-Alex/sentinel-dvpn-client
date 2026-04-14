@@ -191,6 +191,7 @@
     "st_sub": "Invia solo i sottoreticoli specificati attraverso la VPN. Solo WireGuard — sostituisce AllowedIPs = 0.0.0.0/0 con le tue rotte.",
     "st_routes_label": "CIDR da instradare (separati da virgola)",
     "st_routes_hint": "Le rotte predefinite escludono i range locali RFC-1918. Riconnetti per applicare. Per aggiungere l'intera rete: inserisci 0.0.0.0/0 (come disattivato).",
+    "binaries_title": "Gestione Binari VPN",
     "about_title": "Informazioni",
     "about_footer": "Mnemonic cifrato tramite keychain dell'OS (Electron safeStorage). La chiave privata non lascia mai il processo main. Tutte le chiamate API ai nodi sono effettuate tramite il processo main di Electron."
   },
