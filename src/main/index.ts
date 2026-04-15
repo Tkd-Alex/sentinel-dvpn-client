@@ -629,7 +629,8 @@ async function setupTransparentV2Ray(v2ray: V2Ray): Promise<{ success: boolean; 
         `route add ${serverIp} mask 255.255.255.255 ${gateway} METRIC 1`,
         // Launch tun2socks asynchronously and redirect output. Use separate files to avoid handle locks.
         `$p = Start-Process -FilePath "${exe}" -ArgumentList "-device tun://${activeTunInterface} -proxy socks5://127.0.0.1:${socksPort}" -RedirectStandardOutput "${tunLog}.stdout.log" -RedirectStandardError "${tunLog}.stderr.log" -WindowStyle Hidden -PassThru`,
-        `$p.Id | Out-File -FilePath "${path.join(tmpDir, 'tun.pid')}" -Encoding utf8`,
+        // Write ONLY the raw ID to the file, no headers
+        `[System.IO.File]::WriteAllText("${path.join(tmpDir, 'tun.pid')}", $p.Id.ToString())`,
         // Wait loop for interface to appear (max 20s)
         `for ($i=0; $i -lt 20; $i++) { if (Get-NetAdapter -Name "${activeTunInterface}" -ErrorAction SilentlyContinue) { break }; Start-Sleep -Seconds 1 }`,
         `$ifIdx = (Get-NetIPInterface -InterfaceAlias "${activeTunInterface}" -AddressFamily IPv4).InterfaceIndex`,
@@ -637,7 +638,8 @@ async function setupTransparentV2Ray(v2ray: V2Ray): Promise<{ success: boolean; 
         `netsh interface ipv4 set dnsservers name="${activeTunInterface}" static address=1.1.1.1 register=none validate=no`,
         // Use a very low METRIC (2) so it takes precedence over the physical interface
         `route add 0.0.0.0 mask 128.0.0.0 10.0.0.1 METRIC 2 IF $ifIdx`,
-        `route add 128.0.0.0 mask 128.0.0.0 10.0.0.1 METRIC 2 IF $ifIdx`
+        `route add 128.0.0.0 mask 128.0.0.0 10.0.0.1 METRIC 2 IF $ifIdx`,
+        `exit 0`
       ]
 
       try {
@@ -883,21 +885,23 @@ async function execPrivileged(cmds: string[]): Promise<{ code: number; stdout: s
     const psPath = path.join(tmpDir, `sentinel-priv-${reqId}.ps1`)
     const logPath = path.join(tmpDir, `sentinel-priv-${reqId}.log`)
 
+    // Manual logging to avoid Start-Transcript hangs
     const psLines = [
       `$ErrorActionPreference = "Continue"`,
-      `Start-Transcript -Path "${logPath}" -Force`,
-      ...cmds.map(c => `Write-Output '[EXEC] ${c.replace(/'/g, "''")}'; ${c}`),
-      `Stop-Transcript`
+      `echo "[START]" > "${logPath}"`,
+      ...cmds.map(c => `echo "[EXEC] ${c.replace(/'/g, "''")}" >> "${logPath}"; ${c} >> "${logPath}" 2>&1`),
     ]
     fs.writeFileSync(psPath, psLines.join('\r\n'), { encoding: 'utf8' })
 
     const psCmd = `Start-Process powershell -ArgumentList '-ExecutionPolicy Bypass -File \"${psPath}\"' -Verb RunAs -Wait -WindowStyle Hidden`
     
     return new Promise((res) => {
-      const child = spawn('powershell', ['-Command', psCmd])
+      // CRITICAL: Use stdio: 'ignore' to prevent the process from hanging 
+      // when child processes (like tun2socks) inherit the output streams.
+      const child = spawn('powershell', ['-Command', psCmd], { stdio: 'ignore', detached: true })
       child.on('close', (code: number) => {
         const output = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : ''
-        if (code !== 0) {
+        if (code !== 0 && code !== null) {
           console.error(`[ExecPrivileged] Failed with code ${code}. Log: ${logPath}`)
           res({ code, stdout: '', stderr: output || `PowerShell exited with code ${code}` })
         } else {
@@ -905,6 +909,9 @@ async function execPrivileged(cmds: string[]): Promise<{ code: number; stdout: s
           res({ code: 0, stdout: output, stderr: '' })
         }
       })
+      // Unref allows the parent process to exit independently if needed, 
+      // but here we wait for the close event which will now fire correctly.
+      child.unref()
     })
   } else {
     const fullCmd = cmds.join(' && ')
