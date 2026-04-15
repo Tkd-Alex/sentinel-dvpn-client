@@ -956,19 +956,24 @@ h1,h2,h3 { letter-spacing: .08em; text-transform: uppercase; }
 .manage-tab-layout {
   display: flex;
   height: 100%;
-  gap: 24px;
-  padding: 20px;
+  gap: 20px;
+  padding: 16px;
   overflow: hidden;
+  box-sizing: border-box;
 }
 
 .manage-sidebar {
-  flex: 0 0 450px;
+  flex: 0 0 420px;
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 20px;
   overflow-y: auto;
-  padding-right: 10px;
+  min-height: 0;
+  padding-right: 4px;
 }
+
+.manage-sidebar::-webkit-scrollbar { width: 4px; }
+.manage-sidebar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 
 .manage-main {
   flex: 1;
@@ -976,17 +981,18 @@ h1,h2,h3 { letter-spacing: .08em; text-transform: uppercase; }
   background: var(--bg-1);
   border: 1px solid var(--border);
   border-radius: var(--radius);
+  min-width: 0;
 }
 
 .manage-binaries-section {
   background: var(--bg-1);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 20px;
+  padding: 16px;
 }
 
 .binary-check-embedded {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
 }

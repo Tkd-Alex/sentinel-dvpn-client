@@ -349,11 +349,13 @@ export default function App() {
             {activeTab === 'manage' && (
               <div className="manage-tab-layout">
                 <div className="manage-sidebar">
-                  <WalletManager onSwitched={(_, __, rpc) => { 
-                    setCurrentRpc(rpc); 
-                    fetchNodes();
-                    setTimeout(refreshIp, 1000);
-                  }} />
+                  <div className="manage-sidebar-top">
+                    <WalletManager onSwitched={(_, __, rpc) => { 
+                      setCurrentRpc(rpc); 
+                      fetchNodes();
+                      setTimeout(refreshIp, 1000);
+                    }} />
+                  </div>
                   
                   <div className="manage-binaries-section">
                     <div className="settings-section-label" style={{ marginBottom: 12 }}>{t('settings.binaries_title')}</div>
