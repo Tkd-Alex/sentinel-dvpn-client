@@ -347,13 +347,37 @@ export default function App() {
             {activeTab === 'sessions' && <SessionPanel nodes={nodes} onConnectSession={handleConnectSession} />}
 
             {activeTab === 'manage' && (
-              <div className="manage-tab">
-                <WalletManager onSwitched={(_, __, rpc) => { 
-                  setCurrentRpc(rpc); 
-                  fetchNodes();
-                  setTimeout(refreshIp, 1000);
-                }} />
-                <SettingsPanel currentRpc={currentRpc} />
+              <div className="manage-tab-layout">
+                <div className="manage-sidebar">
+                  <div className="manage-sidebar-top">
+                    <WalletManager onSwitched={(_, __, rpc) => { 
+                      setCurrentRpc(rpc); 
+                      fetchNodes();
+                      setTimeout(refreshIp, 1000);
+                    }} />
+                  </div>
+                  
+                  <div className="manage-binaries-section">
+                    <div className="settings-section-label" style={{ marginBottom: 12 }}>{t('settings.binaries_title')}</div>
+                    {binaries ? (
+                      <BinarySetup
+                        status={binaries}
+                        onRecheck={async () => {
+                          const fresh = await window.api.checkBinaries() as BinaryStatus
+                          setBinaries(fresh)
+                          return fresh
+                        }}
+                        embedded
+                      />
+                    ) : (
+                      <div className="spinner" style={{ width: 20, height: 20, margin: '20px auto' }} />
+                    )}
+                  </div>
+                </div>
+                
+                <div className="manage-main">
+                  <SettingsPanel currentRpc={currentRpc} />
+                </div>
               </div>
             )}
           </div>

@@ -163,9 +163,16 @@ export default function BinarySetup({ status, onDismiss, onRecheck, embedded = f
               <div style={{ flex: 1 }}>
                 <div className="binary-name">{g.name}</div>
                 {g.found ? (
-                  <div style={{ fontSize: 9, color: 'var(--text-3)', marginTop: 2, fontFamily: 'var(--font-mono)', wordBreak: 'break-all' }}>
-                    PATH: {g.path}
-                  </div>
+                  <>
+                    <div style={{ fontSize: 9, color: 'var(--text-3)', marginTop: 2, fontFamily: 'var(--font-mono)', wordBreak: 'break-all' }}>
+                      PATH: {g.path}
+                    </div>
+                    {g.hash && (
+                      <div style={{ fontSize: 8, color: 'var(--text-4)', marginTop: 2, fontFamily: 'var(--font-mono)', opacity: 0.8 }}>
+                        SHA256: {g.hash}
+                      </div>
+                    )}
+                  </>
                 ) : (
                   <div className="binary-path">{t('binary.not_found')}</div>
                 )}
@@ -208,8 +215,8 @@ export default function BinarySetup({ status, onDismiss, onRecheck, embedded = f
               </div>
             )}
             
-            {/* Embedded mode always allows browsing even if found */}
-            {embedded && g.found && (
+            {/* Embedded mode always allows browsing even if found (limited to Windows) */}
+            {embedded && g.found && current.platform === 'win32' && (
                <button className="btn btn-secondary btn-xs" style={{ alignSelf: 'flex-start', marginTop: -4 }} onClick={() => handleBrowse(g.id)}>
                  {t('common.browse')} (Change)
                </button>

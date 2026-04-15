@@ -949,3 +949,50 @@ h1,h2,h3 { letter-spacing: .08em; text-transform: uppercase; }
   margin-bottom: 12px;
   line-height: 1.5;
 }
+
+/* ═══════════════════════════════════════════════════
+   Management Tab Layout
+═══════════════════════════════════════════════════ */
+.manage-tab-layout {
+  display: flex;
+  height: 100%;
+  gap: 20px;
+  padding: 16px;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.manage-sidebar {
+  flex: 0 0 420px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  overflow-y: auto;
+  min-height: 0;
+  padding-right: 4px;
+}
+
+.manage-sidebar::-webkit-scrollbar { width: 4px; }
+.manage-sidebar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+.manage-main {
+  flex: 1;
+  overflow-y: auto;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  min-width: 0;
+}
+
+.manage-binaries-section {
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+
+.binary-check-embedded {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
