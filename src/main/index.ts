@@ -659,7 +659,12 @@ async function setupTransparentV2Ray(v2ray: V2Ray): Promise<{ success: boolean; 
 
         activeTun2Socks = { 
           pid: realPid, 
-          kill: () => { try { execSync('taskkill /f /im tun2socks.exe', { stdio: 'ignore' }) } catch {} } 
+          kill: () => { 
+            try { 
+              const cmd = realPid > 0 ? `taskkill /f /pid ${realPid}` : 'taskkill /f /im tun2socks.exe'
+              execSync(cmd, { stdio: 'ignore' }) 
+            } catch {} 
+          } 
         } as any
       } catch (e: any) {
         throw new Error(`Windows network setup failed: ${e.message}`)
@@ -884,34 +889,50 @@ async function execPrivileged(cmds: string[]): Promise<{ code: number; stdout: s
     const reqId = crypto.randomBytes(4).toString('hex')
     const psPath = path.join(tmpDir, `sentinel-priv-${reqId}.ps1`)
     const logPath = path.join(tmpDir, `sentinel-priv-${reqId}.log`)
+    const donePath = path.join(tmpDir, `sentinel-priv-${reqId}.done`)
 
     // Manual logging to avoid Start-Transcript hangs
     const psLines = [
       `$ErrorActionPreference = "Continue"`,
       `echo "[START]" > "${logPath}"`,
       ...cmds.map(c => `echo "[EXEC] ${c.replace(/'/g, "''")}" >> "${logPath}"; ${c} >> "${logPath}" 2>&1`),
+      `[System.IO.File]::WriteAllText("${donePath}", "OK")`
     ]
     fs.writeFileSync(psPath, psLines.join('\r\n'), { encoding: 'utf8' })
 
-    const psCmd = `Start-Process powershell -ArgumentList '-ExecutionPolicy Bypass -File \"${psPath}\"' -Verb RunAs -Wait -WindowStyle Hidden`
+    // REMOVE -Wait from the outer Start-Process to avoid UI freeze/pipe hang.
+    // We will poll for the .done file instead to know when the script finished.
+    const psCmd = `Start-Process powershell -ArgumentList '-ExecutionPolicy Bypass -File \"${psPath}\"' -Verb RunAs -WindowStyle Hidden`
     
     return new Promise((res) => {
-      // CRITICAL: Use stdio: 'ignore' to prevent the process from hanging 
-      // when child processes (like tun2socks) inherit the output streams.
-      const child = spawn('powershell', ['-Command', psCmd], { stdio: 'ignore', detached: true })
-      child.on('close', (code: number) => {
+      // Use shell: true and remove stdio: 'ignore' to allow UAC prompt to appear correctly.
+      const child = spawn('powershell', ['-Command', psCmd], { shell: true })
+      
+      child.on('error', (err) => {
+        res({ code: 1, stdout: '', stderr: `Failed to launch powershell: ${err.message}` })
+      })
+
+      child.on('close', async () => {
+        // The outer powershell closes almost immediately after launching the elevated one.
+        // We now wait for the elevated script to finish by polling the .done file.
+        let totalWait = 0
+        const timeout = 60000 // 60s timeout
+        while (totalWait < timeout) {
+          if (fs.existsSync(donePath)) break
+          await new Promise(r => setTimeout(r, 500))
+          totalWait += 500
+        }
+
         const output = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : ''
-        if (code !== 0 && code !== null) {
-          console.error(`[ExecPrivileged] Failed with code ${code}. Log: ${logPath}`)
-          res({ code, stdout: '', stderr: output || `PowerShell exited with code ${code}` })
+        const done = fs.existsSync(donePath)
+        
+        if (!done) {
+          res({ code: 1, stdout: output, stderr: `Privileged script timed out or was cancelled by user.` })
         } else {
-          try { fs.unlinkSync(psPath); fs.unlinkSync(logPath) } catch {}
+          try { fs.unlinkSync(psPath); fs.unlinkSync(logPath); fs.unlinkSync(donePath) } catch {}
           res({ code: 0, stdout: output, stderr: '' })
         }
       })
-      // Unref allows the parent process to exit independently if needed, 
-      // but here we wait for the close event which will now fire correctly.
-      child.unref()
     })
   } else {
     const fullCmd = cmds.join(' && ')
@@ -1140,14 +1161,18 @@ async function killActiveConnections(sendEndSession = true) {
       ]
       try { await execPrivileged(cleanupCmds) } catch (e) { console.warn('macOS cleanup failed', e) }
     } else if (plat === 'win32') {
-      try { activeTun2Socks.kill() } catch {}
+      if (activeTun2Socks) {
+        try { activeTun2Socks.kill() } catch {}
+      }
       const cleanupCmds = [
         `route delete 0.0.0.0 mask 128.0.0.0`,
         `route delete 128.0.0.0 mask 128.0.0.0`
       ]
       if (activeV2RayServerIp) cleanupCmds.push(`route delete ${activeV2RayServerIp}`)
       try { await execPrivileged(cleanupCmds) } catch (e) { console.warn('Windows cleanup failed', e) }
-    } else { activeTun2Socks.kill() }
+    } else if (activeTun2Socks) { 
+      activeTun2Socks.kill() 
+    }
     activeTun2Socks = null; activeTunInterface = null; activeV2RayServerIp = null
   }
   if (activeV2Ray) { try { activeV2Ray.disconnect() } catch { }; activeV2Ray = null }
