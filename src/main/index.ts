@@ -427,6 +427,7 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('node:connectSession', async (_e, args: { nodeAddress: string; sessionId: number }) => {
     if (!walletState.client || !walletState.address || !walletState.privkey) return { success: false, error: 'Wallet not initialized' }
+    killZombies()
     activeSessionId = args.sessionId.toString(); activeNodeAddress = args.nodeAddress; 
     reconnectAttempts = 0; wasConnected = false;
     return doHandshake(args.nodeAddress, Long.fromNumber(args.sessionId, true))
@@ -626,20 +627,26 @@ async function setupTransparentV2Ray(v2ray: V2Ray): Promise<{ success: boolean; 
 
       // 2. All-in-one privileged PowerShell script for Windows
       const setupCmds = [
+        // Kill existing zombies to avoid port/interface conflicts
+        `taskkill /f /im tun2socks.exe /t /fi "status eq running" 2>$null`,
+        // Remove old routes if they exist
+        `route delete 0.0.0.0 mask 128.0.0.0 2>$null`,
+        `route delete 128.0.0.0 mask 128.0.0.0 2>$null`,
+        `route delete ${serverIp} 2>$null`,
         `route add ${serverIp} mask 255.255.255.255 ${gateway} METRIC 1`,
-        // Launch tun2socks asynchronously and redirect output. Use separate files to avoid handle locks.
+        // Launch tun2socks
         `$p = Start-Process -FilePath "${exe}" -ArgumentList "-device tun://${activeTunInterface} -proxy socks5://127.0.0.1:${socksPort}" -RedirectStandardOutput "${tunLog}.stdout.log" -RedirectStandardError "${tunLog}.stderr.log" -WindowStyle Hidden -PassThru`,
-        // Write ONLY the raw ID to the file, no headers
-        `[System.IO.File]::WriteAllText("${path.join(tmpDir, 'tun.pid')}", $p.Id.ToString())`,
-        // Wait loop for interface to appear (max 20s)
-        `for ($i=0; $i -lt 20; $i++) { if (Get-NetAdapter -Name "${activeTunInterface}" -ErrorAction SilentlyContinue) { break }; Start-Sleep -Seconds 1 }`,
-        `$ifIdx = (Get-NetIPInterface -InterfaceAlias "${activeTunInterface}" -AddressFamily IPv4).InterfaceIndex`,
-        `netsh interface ipv4 set address name="${activeTunInterface}" source=static addr=10.0.0.1 mask=255.255.255.0`,
-        `netsh interface ipv4 set dnsservers name="${activeTunInterface}" static address=1.1.1.1 register=none validate=no`,
-        // Use a very low METRIC (2) so it takes precedence over the physical interface
+        // Wait for $p to be initialized and write PID
+        `if ($p) { [System.IO.File]::WriteAllText("${path.join(tmpDir, 'tun.pid')}", $p.Id.ToString()) }`,
+        // Robust interface detection: look for the adapter and get its REAL name (could be "sentinel-tun 1")
+        `$adapter = $null; for ($i=0; $i -lt 20; $i++) { $adapter = Get-NetAdapter | Where-Object { $_.Name -like "${activeTunInterface}*" } | Sort-Object Name -Descending | Select-Object -First 1; if ($adapter) { break }; Start-Sleep -Seconds 1 }`,
+        `if (-not $adapter) { throw "Timeout waiting for TUN interface" }`,
+        `$realName = $adapter.Name`,
+        `$ifIdx = (Get-NetIPInterface -InterfaceAlias "$realName" -AddressFamily IPv4).InterfaceIndex`,
+        `netsh interface ipv4 set address name="$realName" source=static addr=10.0.0.1 mask=255.255.255.0`,
+        `netsh interface ipv4 set dnsservers name="$realName" static address=1.1.1.1 register=none validate=no`,
         `route add 0.0.0.0 mask 128.0.0.0 10.0.0.1 METRIC 2 IF $ifIdx`,
-        `route add 128.0.0.0 mask 128.0.0.0 10.0.0.1 METRIC 2 IF $ifIdx`,
-        `exit 0`
+        `route add 128.0.0.0 mask 128.0.0.0 10.0.0.1 METRIC 2 IF $ifIdx`
       ]
 
       try {
@@ -652,9 +659,14 @@ async function setupTransparentV2Ray(v2ray: V2Ray): Promise<{ success: boolean; 
         // Read the PID from the temporary file
         let realPid = 0
         const pidFile = path.join(tmpDir, 'tun.pid')
-        if (fs.existsSync(pidFile)) {
-          realPid = parseInt(fs.readFileSync(pidFile, 'utf8').trim()) || 0
-          try { fs.unlinkSync(pidFile) } catch {}
+        const start = Date.now()
+        while (Date.now() - start < 5000) { // Wait up to 5s for PID file
+          if (fs.existsSync(pidFile)) {
+            realPid = parseInt(fs.readFileSync(pidFile, 'utf8').trim()) || 0
+            try { fs.unlinkSync(pidFile) } catch {}
+            break
+          }
+          await new Promise(r => setTimeout(r, 500))
         }
 
         activeTun2Socks = { 
@@ -699,6 +711,7 @@ function extractError(err: unknown): string {
 
 async function doConnect(args: { nodeAddress: string; subscriptionType: 'gigabytes' | 'hours'; amount: number }) {
   try {
+    killZombies()
     mainWindow?.webContents.send('vpn:status', { step: 'fetching_node' })
     const chainNode = await withTimeout(walletState.client!.sentinelQuery?.node.node(args.nodeAddress), RPC_TIMEOUT_MS, 'RPC timeout fetching node')
     if (!chainNode) return { success: false, error: `Node not found: ${args.nodeAddress}` }
@@ -870,6 +883,17 @@ async function applyKillSwitch(enable: boolean, ifNameOverride?: string): Promis
   }
 }
 
+function killZombies() {
+  const plat = process.platform
+  if (plat === 'win32') {
+    try { execSync('taskkill /f /im tun2socks.exe /t /fi "status eq running"', { stdio: 'ignore' }) } catch {}
+    try { execSync('taskkill /f /im v2ray.exe /t /fi "status eq running"', { stdio: 'ignore' }) } catch {}
+  } else {
+    try { execSync('pkill -9 tun2socks || true', { stdio: 'ignore' }) } catch {}
+    try { execSync('pkill -9 v2ray || true', { stdio: 'ignore' }) } catch {}
+  }
+}
+
 async function execPrivileged(cmds: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
   const plat = process.platform
   const { exec } = require('child_process')
@@ -895,7 +919,14 @@ async function execPrivileged(cmds: string[]): Promise<{ code: number; stdout: s
     const psLines = [
       `$ErrorActionPreference = "Continue"`,
       `echo "[START]" > "${logPath}"`,
-      ...cmds.map(c => `echo "[EXEC] ${c.replace(/'/g, "''")}" >> "${logPath}"; ${c} >> "${logPath}" 2>&1`),
+      ...cmds.map(c => {
+        const safeCmd = c.replace(/'/g, "''")
+        // Use single quotes for echo to prevent premature variable expansion in the log
+        const logLine = `echo '[EXEC] ${safeCmd}' >> '${logPath}'`
+        // Do NOT redirect stdout for assignments, it breaks PowerShell variable setting
+        const runLine = c.trim().startsWith('$') ? c : `${c} >> '${logPath}' 2>&1`
+        return `${logLine}; ${runLine}`
+      }),
       `[System.IO.File]::WriteAllText("${donePath}", "OK")`
     ]
     fs.writeFileSync(psPath, psLines.join('\r\n'), { encoding: 'utf8' })
