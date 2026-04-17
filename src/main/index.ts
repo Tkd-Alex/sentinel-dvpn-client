@@ -152,7 +152,7 @@ function createWindow(): void {
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.sentinel.dvpn-client')
   app.on('browser-window-created', (_, w) => optimizer.watchWindowShortcuts(w))
-  vpnLogger.registerIpcHandlers()
+  vpnLogger.registerIpcHandlers(elevatedChannel)
   registerIpcHandlers()
   createWindow()
 })

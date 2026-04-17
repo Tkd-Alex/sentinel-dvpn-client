@@ -31,6 +31,14 @@ export interface ElevResult {
   stderr: string
 }
 
+export interface ChannelDiagnosis {
+  pipeConnected: boolean
+  helperRunning: boolean
+  executionPolicy: string
+  helperLog: string
+  summary: string
+}
+
 export class ElevatedChannel extends EventEmitter {
   private socket: net.Socket | null = null
   private recvBuffer = ''
@@ -38,7 +46,7 @@ export class ElevatedChannel extends EventEmitter {
     string,
     { resolve: (r: ElevResult) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }
   >()
-  private helperLogPath: string
+  public helperLogPath: string
 
   constructor() {
     super()
@@ -75,15 +83,64 @@ export class ElevatedChannel extends EventEmitter {
     this.socket = null
   }
 
+  async diagnose(): Promise<ChannelDiagnosis> {
+    const isRunning = await this.isHelperRunning()
+    let policy = 'unknown'
+    try {
+      policy = execSync('powershell -NoProfile -Command Get-ExecutionPolicy', { encoding: 'utf8' }).trim()
+    } catch {}
+
+    const logTail = fs.existsSync(this.helperLogPath)
+      ? fs.readFileSync(this.helperLogPath, 'utf8').split('\n').slice(-10).join('\n')
+      : 'Log file not found'
+
+    const problems: string[] = []
+    if (!isRunning) problems.push('Helper process not found')
+    if (this.socket === null) problems.push('Pipe not connected')
+    if (policy === 'Restricted') problems.push('PowerShell ExecutionPolicy is Restricted')
+
+    const summary = problems.length === 0
+      ? 'Tutto OK'
+      : 'Problemi rilevati:\n' + problems.map(p => '  - ' + p).join('\n')
+
+    return {
+      pipeConnected: !!this.socket,
+      helperRunning: isRunning,
+      executionPolicy: policy,
+      helperLog: logTail,
+      summary
+    }
+  }
+
+  private async isHelperRunning(): Promise<boolean> {
+    if (process.platform !== 'win32') return false
+    try {
+      const out = execSync(`tasklist /FI "IMAGENAME eq powershell.exe" /FO CSV`, { encoding: 'utf8' })
+      return out.includes('sentinel-helper.ps1') || fs.existsSync(`\\\\.\\pipe\\${PIPE_NAME}`)
+    } catch { return false }
+  }
+
   private async ensureConnected(): Promise<void> {
     if (this.socket && !this.socket.destroyed) return
     if (await this.tryConnect()) return
+    
     await this.launchHelper()
+    
     for (let i = 0; i < CONNECT_RETRIES; i++) {
       if (await this.tryConnect()) return
       await sleep(CONNECT_INTERVAL_MS)
     }
-    throw new Error(`ElevatedChannel: helper failed to start. Check ${this.helperLogPath}`)
+
+    // Se fallisce, prova a leggere il log dell'helper per dare un errore migliore
+    let extra = ''
+    if (fs.existsSync(this.helperLogPath)) {
+      const tail = fs.readFileSync(this.helperLogPath, 'utf8').split('\n').slice(-5).join('\n')
+      extra = `\nLast helper logs:\n${tail}`
+    } else {
+      extra = `\nHelper log not found at ${this.helperLogPath}`
+    }
+
+    throw new Error(`ElevatedChannel: helper failed to connect after 20s. Potential ExecutionPolicy issue.${extra}`)
   }
 
   private tryConnect(): Promise<boolean> {
@@ -133,9 +190,18 @@ export class ElevatedChannel extends EventEmitter {
     const scriptPath = path.join(tmpDir, 'sentinel-helper.ps1')
     fs.writeFileSync(scriptPath, buildHelperScript(PIPE_NAME, this.helperLogPath), { encoding: 'utf8' })
 
-    const launchCmd = `Start-Process powershell -ArgumentList '-NoProfile -ExecutionPolicy Bypass -NonInteractive -File \"${scriptPath}\"' -Verb RunAs -WindowStyle Hidden`
+    // FIX: Usiamo -EncodedCommand (Base64 UTF-16LE) per l'inner command.
+    // Questo bypassa i problemi di quoting e assicura che -ExecutionPolicy Bypass arrivi intatto.
+    const innerCmd = `& "${scriptPath}"`
+    const encodedInner = Buffer.from(innerCmd, 'utf16le').toString('base64')
+
+    const launchCmd = `Start-Process powershell -ArgumentList '-NoProfile -ExecutionPolicy Bypass -NonInteractive -EncodedCommand ${encodedInner}' -Verb RunAs -WindowStyle Hidden`
+    
     await new Promise<void>((resolve, reject) => {
-      const child = spawn('powershell', ['-NoProfile', '-Command', launchCmd], { shell: true, detached: true, stdio: 'ignore' })
+      const child = spawn('powershell', ['-NoProfile', '-Command', launchCmd], { 
+        detached: true, 
+        stdio: 'ignore' 
+      })
       child.once('error', (e) => reject(new Error(`Failed to launch powershell: ${e.message}`)))
       child.once('close', () => resolve())
     })
@@ -217,9 +283,17 @@ export class VpnLogger {
     if (!fs.existsSync(this.logDir)) fs.mkdirSync(this.logDir, { recursive: true })
   }
 
-  registerIpcHandlers() {
+  registerIpcHandlers(channel?: ElevatedChannel) {
     ipcMain.handle('vpn:log:tail', (_: unknown, proc: ProcessName, n = 100) => this.tail(proc, n))
     ipcMain.handle('vpn:log:dump', () => [...this.ringBuffer])
+    
+    if (channel) {
+      ipcMain.handle('vpn:diagnose', async () => {
+        const diag = await channel.diagnose()
+        this.log('system', 'info', '[DIAGNOSI] ' + diag.summary.replace(/\n/g, ' | '))
+        return diag
+      })
+    }
   }
 
   log(proc: ProcessName, level: LogLevel, msg: string) {
