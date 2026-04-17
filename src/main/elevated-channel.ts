@@ -188,23 +188,26 @@ export class ElevatedChannel extends EventEmitter {
   private async launchHelper(): Promise<void> {
     const tmpDir = app.getPath('temp')
     const scriptPath = path.join(tmpDir, 'sentinel-helper.ps1')
+    
+    // Assicurati che la directory dei log esista prima di lanciare
+    const logDir = path.dirname(this.helperLogPath)
+    if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true })
+
     fs.writeFileSync(scriptPath, buildHelperScript(PIPE_NAME, this.helperLogPath), { encoding: 'utf8' })
 
-    // FIX: Usiamo -EncodedCommand (Base64 UTF-16LE) per l'inner command.
-    // Questo bypassa i problemi di quoting e assicura che -ExecutionPolicy Bypass arrivi intatto.
     const innerCmd = `& "${scriptPath}"`
     const encodedInner = Buffer.from(innerCmd, 'utf16le').toString('base64')
 
-    const launchCmd = `Start-Process powershell -ArgumentList '-NoProfile -ExecutionPolicy Bypass -NonInteractive -EncodedCommand ${encodedInner}' -Verb RunAs -WindowStyle Hidden`
+    // Comando esterno che scatena UAC. Usiamo execSync per un trigger immediato.
+    // Passiamo Bypass anche qui per sicurezza.
+    const launchCmd = `Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-NonInteractive','-EncodedCommand','${encodedInner}' -Verb RunAs -WindowStyle Hidden`
     
-    await new Promise<void>((resolve, reject) => {
-      const child = spawn('powershell', ['-NoProfile', '-Command', launchCmd], { 
-        detached: true, 
-        stdio: 'ignore' 
-      })
-      child.once('error', (e) => reject(new Error(`Failed to launch powershell: ${e.message}`)))
-      child.once('close', () => resolve())
-    })
+    try {
+      // execSync qui non blocca la UI perché Start-Process torna immediatamente (non usiamo -Wait)
+      execSync(`powershell -NoProfile -ExecutionPolicy Bypass -Command "${launchCmd.replace(/"/g, '\\"')}"`, { stdio: 'ignore' })
+    } catch (e: any) {
+      throw new Error(`Impossibile scatenare UAC: ${e.message}`)
+    }
   }
 }
 
@@ -214,11 +217,16 @@ function buildHelperScript(pipeName: string, logPath: string): string {
 #Requires -RunAsAdministrator
 $ErrorActionPreference = "Continue"
 $logFile = "${logEsc}"
+
 function Write-HelperLog {
   param([string]$Level, [string]$Msg)
   $ts = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss.fff")
   $line = "[$ts][$Level] $Msg"
-  try { Add-Content -LiteralPath $logFile -Value $line -Encoding UTF8 } catch {}
+  try { 
+    $dir = Split-Path $logFile
+    if (-not (Test-Path $dir)) { New-Item -Path $dir -ItemType Directory -Force | Out-Null }
+    Add-Content -LiteralPath $logFile -Value $line -Encoding UTF8 
+  } catch {}
 }
 Write-HelperLog "INFO" "=== Helper started. Pipe: ${pipeName} ==="
 try {
