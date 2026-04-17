@@ -831,6 +831,10 @@ function killZombies() {
   if (plat === 'win32') {
     try { execSync('taskkill /f /im tun2socks.exe /t /fi "status eq running"', { stdio: 'ignore' }) } catch {}
     try { execSync('taskkill /f /im v2ray.exe /t /fi "status eq running"', { stdio: 'ignore' }) } catch {}
+    try {
+      // Kill only our specific powershell helpers from previous runs
+      execSync('wmic process where "name=\'powershell.exe\' and commandline like \'%sentinel-helper%\'" delete', { stdio: 'ignore' })
+    } catch {}
   } else {
     try { execSync('pkill -9 tun2socks || true', { stdio: 'ignore' }) } catch {}
     try { execSync('pkill -9 v2ray || true', { stdio: 'ignore' }) } catch {}

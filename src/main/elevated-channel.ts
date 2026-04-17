@@ -19,7 +19,7 @@ import { EventEmitter } from 'events'
 // SECTION 1 — ElevatedChannel
 // ─────────────────────────────────────────────────────────────────────────────
 
-const PIPE_NAME = 'sentinel-vpn-helper-v1'
+const PIPE_NAME = `sentinel-helper-v1-${process.pid}`
 const CONNECT_RETRIES = 40          // 40 × 500ms = 20s massimo
 const CONNECT_INTERVAL_MS = 500
 const REQUEST_TIMEOUT_MS = 90_000  // 90s hard timeout per singolo script
@@ -222,7 +222,7 @@ function Write-HelperLog {
 }
 Write-HelperLog "INFO" "=== Helper started. Pipe: ${pipeName} ==="
 try {
-  $pipe = New-Object System.IO.Pipes.NamedPipeServerStream("${pipeName}", [System.IO.Pipes.PipeDirection]::InOut, 1, [System.IO.Pipes.PipeTransmissionMode]::Byte, [System.IO.Pipes.PipeOptions]::None)
+  $pipe = New-Object System.IO.Pipes.NamedPipeServerStream("${pipeName}", [System.IO.Pipes.PipeDirection]::InOut, 10, [System.IO.Pipes.PipeTransmissionMode]::Byte, [System.IO.Pipes.PipeOptions]::None)
   Write-HelperLog "INFO" "Waiting for client..."
   $pipe.WaitForConnection()
   Write-HelperLog "INFO" "Client connected"
