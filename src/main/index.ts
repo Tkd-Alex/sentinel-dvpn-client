@@ -30,6 +30,7 @@ import * as path from 'path'
 import * as os from 'os'
 import * as dns from 'dns'
 import * as crypto from 'crypto'
+import { elevatedChannel, vpnLogger, setupTransparentV2RayWindows } from './elevated-channel'
 
 // ── GasPrice shim ────────────────────────────────────────────────────────────
 function makeGasPrice(str: string): unknown {
@@ -151,6 +152,7 @@ function createWindow(): void {
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.sentinel.dvpn-client')
   app.on('browser-window-created', (_, w) => optimizer.watchWindowShortcuts(w))
+  vpnLogger.registerIpcHandlers()
   registerIpcHandlers()
   createWindow()
 })
@@ -444,6 +446,7 @@ function registerIpcHandlers(): void {
     if (!activeV2Ray) return { success: false, error: 'No V2Ray session' }
     try {
       const pid = activeV2Ray.connect()
+      if (activeV2Ray.child) vpnLogger.attach('v2ray', activeV2Ray.child)
       if (transparent) {
         const result = await setupTransparentV2Ray(activeV2Ray)
         if (!result.success) {
@@ -611,77 +614,17 @@ async function setupTransparentV2Ray(v2ray: V2Ray): Promise<{ success: boolean; 
       const settings = getSettings()
       if (settings.killSwitch) await applyKillSwitch(true, activeTunInterface)
     } else if (plat === 'win32') {
-      activeTunInterface = 'sentinel-tun'
       const binaries = checkBinaries()
       const exe = binaries.tun2socksPath || 'tun2socks.exe'
-      const tmpDir = app.getPath('temp')
-      const tunLog = path.join(tmpDir, 'sentinel-tun2socks.log')
-
-      // 1. Get the real default gateway on Windows
-      let gateway = '0.0.0.0'
-      try {
-        const routeOut = execSync('route print 0.0.0.0').toString()
-        const match = routeOut.match(/0\.0\.0\.0\s+0\.0\.0\.0\s+(\d+\.\d+\.\d+\.\d+)/)
-        if (match) gateway = match[1]
-      } catch (e) { console.warn('[Transparent] Failed to detect gateway', e) }
-
-      // 2. All-in-one privileged PowerShell script for Windows
-      const setupCmds = [
-        // Kill existing zombies to avoid port/interface conflicts
-        `taskkill /f /im tun2socks.exe /t /fi "status eq running" 2>$null`,
-        // Remove old routes if they exist
-        `route delete 0.0.0.0 mask 128.0.0.0 2>$null`,
-        `route delete 128.0.0.0 mask 128.0.0.0 2>$null`,
-        `route delete ${serverIp} 2>$null`,
-        `route add ${serverIp} mask 255.255.255.255 ${gateway} METRIC 1`,
-        // Launch tun2socks
-        `$p = Start-Process -FilePath "${exe}" -ArgumentList "-device tun://${activeTunInterface} -proxy socks5://127.0.0.1:${socksPort}" -RedirectStandardOutput "${tunLog}.stdout.log" -RedirectStandardError "${tunLog}.stderr.log" -WindowStyle Hidden -PassThru`,
-        // Wait for $p to be initialized and write PID
-        `if ($p) { [System.IO.File]::WriteAllText("${path.join(tmpDir, 'tun.pid')}", $p.Id.ToString()) }`,
-        // Robust interface detection: look for the adapter and get its REAL name (could be "sentinel-tun 1")
-        `$adapter = $null; for ($i=0; $i -lt 20; $i++) { $adapter = Get-NetAdapter | Where-Object { $_.Name -like "${activeTunInterface}*" } | Sort-Object Name -Descending | Select-Object -First 1; if ($adapter) { break }; Start-Sleep -Seconds 1 }`,
-        `if (-not $adapter) { throw "Timeout waiting for TUN interface" }`,
-        `$realName = $adapter.Name`,
-        `$ifIdx = (Get-NetIPInterface -InterfaceAlias "$realName" -AddressFamily IPv4).InterfaceIndex`,
-        `netsh interface ipv4 set address name="$realName" source=static addr=10.0.0.1 mask=255.255.255.0`,
-        `netsh interface ipv4 set dnsservers name="$realName" static address=1.1.1.1 register=none validate=no`,
-        `route add 0.0.0.0 mask 128.0.0.0 10.0.0.1 METRIC 2 IF $ifIdx`,
-        `route add 128.0.0.0 mask 128.0.0.0 10.0.0.1 METRIC 2 IF $ifIdx`
-      ]
-
-      try {
-        const res = await execPrivileged(setupCmds)
-        if (res.code !== 0) {
-          const tunError = fs.existsSync(`${tunLog}.stderr.log`) ? fs.readFileSync(`${tunLog}.stderr.log`, 'utf8') : ''
-          throw new Error(res.stderr + (tunError ? `\nTun2Socks Error: ${tunError}` : ''))
-        }
-        
-        // Read the PID from the temporary file
-        let realPid = 0
-        const pidFile = path.join(tmpDir, 'tun.pid')
-        const start = Date.now()
-        while (Date.now() - start < 5000) { // Wait up to 5s for PID file
-          if (fs.existsSync(pidFile)) {
-            realPid = parseInt(fs.readFileSync(pidFile, 'utf8').trim()) || 0
-            try { fs.unlinkSync(pidFile) } catch {}
-            break
-          }
-          await new Promise(r => setTimeout(r, 500))
-        }
-
-        activeTun2Socks = { 
-          pid: realPid, 
-          kill: () => { 
-            try { 
-              const cmd = realPid > 0 ? `taskkill /f /pid ${realPid}` : 'taskkill /f /im tun2socks.exe'
-              execSync(cmd, { stdio: 'ignore' }) 
-            } catch {} 
-          } 
-        } as any
-      } catch (e: any) {
-        throw new Error(`Windows network setup failed: ${e.message}`)
-      }
-
+      const { pid, realName } = await setupTransparentV2RayWindows({
+        serverIp, socksPort, tunInterface: 'sentinel-tun', tun2socksExe: exe,
+        channel: elevatedChannel, logger: vpnLogger
+      })
+      activeTunInterface = realName
+      activeTun2Socks = { 
+        pid, 
+        kill: () => { try { execSync(`taskkill /f /pid ${pid} /t`, { stdio: 'ignore' }) } catch {} } 
+      } as any
       const settings = getSettings()
       if (settings.killSwitch) await applyKillSwitch(true, activeTunInterface)
     }
