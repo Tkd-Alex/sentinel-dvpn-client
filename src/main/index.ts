@@ -826,36 +826,60 @@ async function applyKillSwitch(enable: boolean, ifNameOverride?: string): Promis
   }
 }
 
-function execPrivileged(cmds: string[]): { code: number; stdout: string; stderr: string } {
+async function execPrivileged(cmds: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
   const plat = process.platform
-  const fullCmd = cmds.join(' && ')
-  console.log(`[ExecPrivileged] Platform: ${plat}, Command: ${fullCmd}`)
+  const { exec } = require('child_process')
+  console.log(`[ExecPrivileged] Platform: ${plat}`)
+  cmds.forEach((c, i) => console.log(`  [Cmd #${i+1}]: ${c}`))
 
-  try {
-    if (plat === 'darwin') {
-      const osaCmd = `osascript -e 'do shell script "${fullCmd.replace(/"/g, '\\"')}" with administrator privileges'`
-      const stdout = execSync(osaCmd).toString()
-      return { code: 0, stdout, stderr: '' }
-    } else if (plat === 'win32') {
-      // Use powershell Start-Process with -Verb RunAs to trigger UAC elevation prompt
-      const escapedCmd = fullCmd.replace(/"/g, '""')
-      const psCmd = `powershell -Command "Start-Process cmd -ArgumentList '/c ${escapedCmd}' -Verb RunAs -Wait"`
-      const stdout = execSync(psCmd).toString()
-      return { code: 0, stdout, stderr: '' }
-    } else {
-      const bin = ['pkexec', 'gksudo', 'kdesudo', 'sudo'].find(b => {
-        try { execSync(`which ${b}`, { stdio: 'ignore' }); return true } catch { return false }
-      }) || 'sudo'
-      const cmdPrefix = bin === 'sudo' ? 'sudo -A' : bin
-      const stdout = execSync(`${cmdPrefix} bash -c "${fullCmd.replace(/"/g, '\\"')}"`).toString()
-      return { code: 0, stdout, stderr: '' }
-    }
-  } catch (e: any) {
-    return { 
-      code: e.status ?? 1, 
-      stdout: e.stdout?.toString() ?? '', 
-      stderr: e.stderr?.toString() ?? e.message 
-    }
+  if (plat === 'darwin') {
+    const fullCmd = cmds.join(' && ')
+    const osaCmd = `osascript -e 'do shell script "${fullCmd.replace(/"/g, '\\"')}" with administrator privileges'`
+    return new Promise((res) => {
+      exec(osaCmd, (error: any, stdout: string, stderr: string) => {
+        res({ code: error ? (error.code || 1) : 0, stdout, stderr })
+      })
+    })
+  } else if (plat === 'win32') {
+    const tmpDir = app.getPath('temp')
+    const reqId = crypto.randomBytes(4).toString('hex')
+    const psPath = path.join(tmpDir, `sentinel-priv-${reqId}.ps1`)
+    const logPath = path.join(tmpDir, `sentinel-priv-${reqId}.log`)
+
+    const psLines = [
+      `$ErrorActionPreference = "Continue"`,
+      `Start-Transcript -Path "${logPath}" -Force`,
+      ...cmds.map(c => `Write-Output '[EXEC] ${c.replace(/'/g, "''")}'; ${c}`),
+      `Stop-Transcript`
+    ]
+    fs.writeFileSync(psPath, psLines.join('\r\n'), { encoding: 'utf8' })
+
+    const psCmd = `powershell -Command "Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','""${psPath}""' -Verb RunAs -Wait -WindowStyle Hidden"`
+
+    return new Promise((res) => {
+      exec(psCmd, (error: any) => {
+        const output = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : ''
+        if (error) {
+          console.error(`[ExecPrivileged] Script failed. Log kept at: ${logPath}`)
+          res({ code: error.code || 1, stdout: '', stderr: output || error.message })
+        } else {
+          try { fs.unlinkSync(psPath); fs.unlinkSync(logPath) } catch {}
+          res({ code: 0, stdout: output, stderr: '' })
+        }
+      })
+    })
+  } else {
+    const fullCmd = cmds.join(' && ')
+    const bin = ['pkexec', 'gksudo', 'kdesudo', 'sudo'].find(b => {
+      try { execSync(`which ${b}`, { stdio: 'ignore' }); return true } catch { return false }
+    }) || 'sudo'
+    const cmdPrefix = bin === 'sudo' ? 'sudo -A' : bin
+    const finalCmd = `${cmdPrefix} bash -c "${fullCmd.replace(/"/g, '\\"')}"`
+    return new Promise((res) => {
+      exec(finalCmd, (error: any, stdout: string, stderr: string) => {
+        res({ code: error ? (error.code || 1) : 0, stdout, stderr })
+      })
+    })
   }
 }
 
@@ -913,7 +937,8 @@ async function wgQuickUp(configFile: string): Promise<{ success: boolean; error?
 async function wgQuickDown(configFile: string): Promise<void> {
   const plat = process.platform
   const ifName = path.basename(configFile, '.conf')
-  stopTrafficPolling()
+  // Note: traffic polling stop is handled by the global state management in App.tsx usually,
+  // but we should ensure we don't call non-existent functions.
 
   try {
     if (plat === 'win32') {
