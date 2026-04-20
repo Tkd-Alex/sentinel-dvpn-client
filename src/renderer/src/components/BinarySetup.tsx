@@ -166,9 +166,16 @@ export default function BinarySetup({ status, onDismiss, onRecheck, embedded = f
                   <span className={`tag ${g.found ? 'tag-green' : 'tag-red'}`}>{g.found ? t('common.verified') : t('common.missing')}</span>
                 </div>
                 {g.found ? (
-                  <div className="binary-path" title={g.path ?? ''}>
-                    {g.path}
-                  </div>
+                  <>
+                    <div className="binary-path" title={g.path ?? ''}>
+                      {g.path}
+                    </div>
+                    {g.hash && (
+                      <div style={{ fontSize: 8, color: 'var(--text-3)', fontFamily: 'var(--font-mono)', opacity: 0.8, marginTop: 1, wordBreak: 'break-all' }}>
+                        SHA256: {g.hash}
+                      </div>
+                    )}
+                  </>
                 ) : (
                   <div className="binary-path" style={{ color: 'var(--red)', opacity: 0.8 }}>{t('binary.not_found')}</div>
                 )}
