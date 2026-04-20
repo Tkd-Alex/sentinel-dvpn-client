@@ -31,7 +31,7 @@ import * as os from 'os'
 import * as dns from 'dns'
 import * as crypto from 'crypto'
 
-import { pingHelper } from './helper-client'
+import { pingHelper, sendToHelper } from './helper-client'
 
 // ── GasPrice shim ────────────────────────────────────────────────────────────
 function makeGasPrice(str: string): unknown {
@@ -158,6 +158,16 @@ app.whenReady().then(async () => {
 
   const alive = await pingHelper()
   console.log('Helper alive:', alive)
+
+  // DEBUG
+  const binaries = checkBinaries()
+  const helperResp = await sendToHelper({
+    command: 'start-transparent',
+    tun2socksPath: binaries.tun2socksPath!,
+    socksPort: 10808,
+    serverIp: '1.2.3.4'
+  })
+  console.log(helperResp)
 })
 
 app.on('window-all-closed', async () => {
