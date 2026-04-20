@@ -31,7 +31,8 @@
     "verified": "VERIFIZIERT",
     "missing": "FEHLT",
     "checking": "Prüfen...",
-    "exec": "Ausführen"
+    "exec": "Ausführen",
+    "browse": "Durchsuchen"
   },
   "tabs": {
     "globe": "Globus",
@@ -190,6 +191,7 @@
     "st_sub": "Nur spezifizierte Subnetze über VPN leiten. Nur WireGuard.",
     "st_routes_label": "Geroutete CIDRs (kommagetrennt)",
     "st_routes_hint": "Standardrouten schließen RFC-1918 lokale Bereiche aus.",
+    "binaries_title": "VPN-Binärdateien-Verwaltung",
     "about_title": "Über",
     "about_footer": "Wiederherstellungsphrase verschlüsselt im System gespeichert. Der private Schlüssel verlässt niemals den Hauptprozess."
   },
@@ -302,6 +304,7 @@
       "wireguard": "Erforderlich für Hochleistungs-VPN-Tunnel auf Kernelebene.",
       "v2ray": "Erforderlich für verschleierte Proxy-Verbindungen (VMess/VLess).",
       "tun2socks": "Erforderlich für systemweite V2Ray-Unterstützung via TUN-Schnittstelle."
-    }
+    },
+    "wintun_missing": "Windows-Anforderung: Kopieren Sie 'wintun.dll' in denselben Ordner wie tun2socks.exe."
   }
 }

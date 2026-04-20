@@ -31,7 +31,8 @@
     "verified": "VERIFICATO",
     "missing": "MANCANTE",
     "checking": "Controllo...",
-    "exec": "Esegui"
+    "exec": "Esegui",
+    "browse": "Sfoglia"
   },
   "tabs": {
     "globe": "Globo",
@@ -190,6 +191,7 @@
     "st_sub": "Invia solo i sottoreticoli specificati attraverso la VPN. Solo WireGuard — sostituisce AllowedIPs = 0.0.0.0/0 con le tue rotte.",
     "st_routes_label": "CIDR da instradare (separati da virgola)",
     "st_routes_hint": "Le rotte predefinite escludono i range locali RFC-1918. Riconnetti per applicare. Per aggiungere l'intera rete: inserisci 0.0.0.0/0 (come disattivato).",
+    "binaries_title": "Gestione Binari VPN",
     "about_title": "Informazioni",
     "about_footer": "Mnemonic cifrato tramite keychain dell'OS (Electron safeStorage). La chiave privata non lascia mai il processo main. Tutte le chiamate API ai nodi sono effettuate tramite il processo main di Electron."
   },
@@ -302,6 +304,7 @@
       "wireguard": "Richiesto per tunnel VPN ad alte prestazioni a livello kernel.",
       "v2ray": "Richiesto per connessioni proxy offuscate (VMess/VLess).",
       "tun2socks": "Richiesto per il supporto V2Ray a livello di sistema via interfaccia TUN."
-    }
+    },
+    "wintun_missing": "Requisito Windows: posiziona 'wintun.dll' nella stessa cartella di tun2socks.exe."
   }
 }

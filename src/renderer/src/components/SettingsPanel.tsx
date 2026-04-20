@@ -194,6 +194,7 @@ export default function SettingsPanel({ currentRpc }: Props) {
         )}
       </div>
 
+      {/* ── About ── */}
       <div className="settings-section">
         <div className="settings-section-label">{t('settings.about_title')}</div>
         <div className="settings-about">

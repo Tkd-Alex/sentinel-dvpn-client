@@ -15,6 +15,7 @@ const api = {
   saveSettings:  (patch: Record<string, unknown>) => ipcRenderer.invoke('settings:set', patch),
 
   checkBinaries: () => ipcRenderer.invoke('binary:check'),
+  browseBinary: (name: string) => ipcRenderer.invoke('binary:browse', name),
   installBinary: (cmd: string) => ipcRenderer.invoke('binary:install', cmd),
 
   // Multi-wallet

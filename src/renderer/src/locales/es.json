@@ -31,7 +31,8 @@
     "verified": "VERIFICADO",
     "missing": "FALTANTE",
     "checking": "Comprobando...",
-    "exec": "Ejecutar"
+    "exec": "Ejecutar",
+    "browse": "Explorar"
   },
   "tabs": {
     "globe": "Globo",
@@ -190,6 +191,7 @@
     "st_sub": "Solo enrutar subredes específicas a través de la VPN. Solo WireGuard.",
     "st_routes_label": "CIDR enrutados (separados por comas)",
     "st_routes_hint": "Las rutas predeterminadas excluyen los rangos locales RFC-1918.",
+    "binaries_title": "Gestión de Binarios VPN",
     "about_title": "Acerca de",
     "about_footer": "Mnemónico cifrado en el sistema. La clave privada nunca sale del proceso principal."
   },
@@ -302,6 +304,7 @@
       "wireguard": "Necesario para túneles VPN de alto rendimiento a nivel de kernel.",
       "v2ray": "Necesario para conexiones proxy ofuscadas (VMess/VLess).",
       "tun2socks": "Necesario para soporte V2Ray en todo el sistema vía interfaz TUN."
-    }
+    },
+    "wintun_missing": "Requisito de Windows: Coloque 'wintun.dll' in la misma carpeta que tun2socks.exe."
   }
 }

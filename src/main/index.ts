@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell, safeStorage } from 'electron'
+import { app, BrowserWindow, ipcMain, shell, safeStorage, dialog } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import Store from 'electron-store'
@@ -76,6 +76,7 @@ const STORE_KEY_RPC      = 'selected_rpc'
 const STORE_KEY_WALLETS  = 'wallets'
 const STORE_KEY_ACTIVE_W = 'active_wallet'
 const STORE_KEY_SETTINGS = 'settings'
+const STORE_KEY_BINARIES = 'custom_binaries'
 const NODES_API          = 'https://api.sentnodes.com/v2/nodes'
 const RPC_TIMEOUT_MS     = 10_000
 
@@ -198,8 +199,20 @@ function registerIpcHandlers(): void {
   })
 
   ipcMain.handle('binary:check', () => checkBinaries())
+  ipcMain.handle('binary:browse', async (_e, name: string) => {
+    const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow!, {
+      title: `Select ${name} executable`,
+      filters: [{ name: 'Executables', extensions: ['exe', 'app', 'bin', '*'] }],
+      properties: ['openFile']
+    })
+    if (canceled || filePaths.length === 0) return { success: false }
+    const custom = (store.get(STORE_KEY_BINARIES) as Record<string, string>) ?? {}
+    custom[name] = filePaths[0]
+    store.set(STORE_KEY_BINARIES, custom)
+    return { success: true, path: filePaths[0] }
+  })
   ipcMain.handle('binary:install', async (_e, cmd: string) => {
-    const res = execPrivileged([cmd])
+    const res = await execPrivileged([cmd])
     if (res.code === 0) return { success: true }
     return { success: false, error: res.stderr }
   })
@@ -664,9 +677,20 @@ async function doConnect(args: { nodeAddress: string; subscriptionType: 'gigabyt
 }
 
 function getNextWgInterface(): string {
+  const plat = process.platform
   for (let i = 0; i < 10; i++) {
     const ifName = `sentinel${i}`
-    try { execSync(`ip link show ${ifName}`, { stdio: 'ignore' }) } catch { return ifName }
+    try {
+      if (plat === 'win32') {
+        // On Windows, check if the WireGuard tunnel service already exists (non-privileged check)
+        execSync(`sc.exe query WireGuardTunnel$${ifName}`, { stdio: 'ignore' })
+      } else {
+        execSync(`ip link show ${ifName}`, { stdio: 'ignore' })
+      }
+    } catch {
+      // Command failed = service/interface does not exist, name is FREE
+      return ifName
+    }
   }
   return 'sentinel9'
 }
@@ -782,53 +806,80 @@ async function applyKillSwitch(enable: boolean, ifNameOverride?: string): Promis
       ? [`iptables -I OUTPUT ! -o ${targetIf} -m mark ! --mark 0xca6c -j DROP`, `iptables -I OUTPUT -o lo -j ACCEPT`, `ip6tables -I OUTPUT ! -o ${targetIf} -j DROP`, `ip6tables -I OUTPUT -o lo -j ACCEPT`] 
       : [`iptables -D OUTPUT ! -o ${targetIf} -m mark ! --mark 0xca6c -j DROP || true`, `iptables -D OUTPUT -o lo -j ACCEPT || true`, `ip6tables -D OUTPUT ! -o ${targetIf} -j DROP || true`, `ip6tables -D OUTPUT -o lo -j ACCEPT || true`]
     
-    const res = execPrivileged(cmds)
+    const res = await execPrivileged(cmds)
     if (res.code !== 0 && enable) console.warn(`[KillSwitch] Linux apply failed: ${res.stderr}`)
   } else if (plat === 'darwin') {
     const rules = enable ? `block drop all\npass on lo0\npass on utun+\n` : `pass all\n`
     fs.writeFileSync('/tmp/sentinel-pf.conf', rules)
-    const res = execPrivileged([`pfctl -f /tmp/sentinel-pf.conf ${enable ? '-e' : '-d'} || true`])
+    const res = await execPrivileged([`pfctl -f /tmp/sentinel-pf.conf ${enable ? '-e' : '-d'} || true`])
     if (res.code !== 0 && enable) console.warn(`[KillSwitch] PF failed: ${res.stderr}`)
   } else if (plat === 'win32') {
     try {
       if (enable) {
-        execSync('netsh advfirewall firewall add rule name="SentinelKS" dir=out action=block', { stdio: 'ignore' })
-        execSync('netsh advfirewall firewall add rule name="SentinelKS-VPN" dir=out action=allow interface=any', { stdio: 'ignore' })
+        // Add rules (KillSwitch: block all, but allow VPN traffic)
+        execSync('netsh advfirewall firewall add rule name="SentinelKS" dir=out action=block & netsh advfirewall firewall add rule name="SentinelKS-VPN" dir=out action=allow interface=any', { stdio: 'ignore' })
       } else {
-        execSync('netsh advfirewall firewall delete rule name="SentinelKS"', { stdio: 'ignore' })
-        execSync('netsh advfirewall firewall delete rule name="SentinelKS-VPN"', { stdio: 'ignore' })
+        // Delete rules silently
+        execSync('netsh advfirewall firewall delete rule name="SentinelKS" & netsh advfirewall firewall delete rule name="SentinelKS-VPN" & exit 0', { stdio: 'ignore' })
       }
     } catch (e) { console.warn(`[KillSwitch] Windows Firewall failed`, e) }
   }
 }
 
-function execPrivileged(cmds: string[]): { code: number; stdout: string; stderr: string } {
+async function execPrivileged(cmds: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
   const plat = process.platform
-  const fullCmd = cmds.join(' && ')
-  console.log(`[ExecPrivileged] Platform: ${plat}, Command: ${fullCmd}`)
+  const { exec } = require('child_process')
+  console.log(`[ExecPrivileged] Platform: ${plat}`)
+  cmds.forEach((c, i) => console.log(`  [Cmd #${i+1}]: ${c}`))
 
-  try {
-    if (plat === 'darwin') {
-      const osaCmd = `osascript -e 'do shell script "${fullCmd.replace(/"/g, '\\"')}" with administrator privileges'`
-      const stdout = execSync(osaCmd).toString()
-      return { code: 0, stdout, stderr: '' }
-    } else if (plat === 'win32') {
-      const stdout = execSync(fullCmd).toString()
-      return { code: 0, stdout, stderr: '' }
-    } else {
-      const bin = ['pkexec', 'gksudo', 'kdesudo', 'sudo'].find(b => {
-        try { execSync(`which ${b}`, { stdio: 'ignore' }); return true } catch { return false }
-      }) || 'sudo'
-      const cmdPrefix = bin === 'sudo' ? 'sudo -A' : bin
-      const stdout = execSync(`${cmdPrefix} bash -c "${fullCmd.replace(/"/g, '\\"')}"`).toString()
-      return { code: 0, stdout, stderr: '' }
-    }
-  } catch (e: any) {
-    return { 
-      code: e.status ?? 1, 
-      stdout: e.stdout?.toString() ?? '', 
-      stderr: e.stderr?.toString() ?? e.message 
-    }
+  if (plat === 'darwin') {
+    const fullCmd = cmds.join(' && ')
+    const osaCmd = `osascript -e 'do shell script "${fullCmd.replace(/"/g, '\\"')}" with administrator privileges'`
+    return new Promise((res) => {
+      exec(osaCmd, (error: any, stdout: string, stderr: string) => {
+        res({ code: error ? (error.code || 1) : 0, stdout, stderr })
+      })
+    })
+  } else if (plat === 'win32') {
+    const tmpDir = app.getPath('temp')
+    const reqId = crypto.randomBytes(4).toString('hex')
+    const psPath = path.join(tmpDir, `sentinel-priv-${reqId}.ps1`)
+    const logPath = path.join(tmpDir, `sentinel-priv-${reqId}.log`)
+
+    const psLines = [
+      `$ErrorActionPreference = "Continue"`,
+      `Start-Transcript -Path "${logPath}" -Force`,
+      ...cmds.map(c => `Write-Output '[EXEC] ${c.replace(/'/g, "''")}'; ${c}`),
+      `Stop-Transcript`
+    ]
+    fs.writeFileSync(psPath, psLines.join('\r\n'), { encoding: 'utf8' })
+
+    const psCmd = `powershell -Command "Start-Process powershell -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','""${psPath}""' -Verb RunAs -Wait -WindowStyle Hidden"`
+
+    return new Promise((res) => {
+      exec(psCmd, (error: any) => {
+        const output = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : ''
+        if (error) {
+          console.error(`[ExecPrivileged] Script failed. Log kept at: ${logPath}`)
+          res({ code: error.code || 1, stdout: '', stderr: output || error.message })
+        } else {
+          try { fs.unlinkSync(psPath); fs.unlinkSync(logPath) } catch {}
+          res({ code: 0, stdout: output, stderr: '' })
+        }
+      })
+    })
+  } else {
+    const fullCmd = cmds.join(' && ')
+    const bin = ['pkexec', 'gksudo', 'kdesudo', 'sudo'].find(b => {
+      try { execSync(`which ${b}`, { stdio: 'ignore' }); return true } catch { return false }
+    }) || 'sudo'
+    const cmdPrefix = bin === 'sudo' ? 'sudo -A' : bin
+    const finalCmd = `${cmdPrefix} bash -c "${fullCmd.replace(/"/g, '\\"')}"`
+    return new Promise((res) => {
+      exec(finalCmd, (error: any, stdout: string, stderr: string) => {
+        res({ code: error ? (error.code || 1) : 0, stdout, stderr })
+      })
+    })
   }
 }
 
@@ -849,12 +900,18 @@ async function wgQuickUp(configFile: string): Promise<{ success: boolean; error?
   const isDnsError = (stderr: string) => 
     stderr.includes('resolvconf') || stderr.includes('resolve1') || stderr.includes('Failed to set DNS') || stderr.includes('DNS')
 
-  const run = () => {
-    if (plat === 'win32') return { code: execPrivileged([`wireguard.exe /installservice "${configFile}"`]).code, stderr: '' } // Windows stdout/err handling is limited here
-    return execPrivileged([`wg-quick up "${configFile}"`])
+  const run = async () => {
+    if (plat === 'win32') {
+      const info = checkBinaries()
+      const exe = info.wgPath || 'wireguard.exe'
+      // Use & "path" to handle spaces and quotes correctly in PowerShell
+      const res = await execPrivileged([`& "${exe}" /installtunnelservice "${configFile}"`])
+      return { code: res.code, stderr: res.stderr }
+    }
+    return await execPrivileged([`wg-quick up "${configFile}"`])
   }
 
-  let r1 = run()
+  let r1 = await run()
   if (r1.code === 0) {
     const settings = getSettings()
     if (settings.killSwitch) applyKillSwitch(true).catch(() => {})
@@ -866,7 +923,7 @@ async function wgQuickUp(configFile: string): Promise<{ success: boolean; error?
     mainWindow?.webContents.send('vpn:dns-retry-ask')
     await new Promise((res) => { ipcMain.once('vpn:dns-retry-approved', () => res(true)) })
     patchConfigFileForDns(configFile)
-    let r2 = run()
+    let r2 = await run()
     if (r2.code === 0) {
       startTrafficPolling()
       mainWindow?.webContents.send('vpn:warning', { message: 'Connected without DNS injection.' })
@@ -880,13 +937,18 @@ async function wgQuickUp(configFile: string): Promise<{ success: boolean; error?
 async function wgQuickDown(configFile: string): Promise<void> {
   const plat = process.platform
   const ifName = path.basename(configFile, '.conf')
+  // Note: traffic polling stop is handled by the global state management in App.tsx usually,
+  // but we should ensure we don't call non-existent functions.
 
   try {
     if (plat === 'win32') {
-      spawnSync('wireguard.exe', ['/uninstallservice', ifName], { stdio: 'ignore' })
+      const info = checkBinaries()
+      const exe = info.wgPath || 'wireguard.exe'
+      // Use execPrivileged for uninstall to trigger UAC
+      await execPrivileged([`& "${exe}" /uninstalltunnelservice "${ifName}"`]).catch(() => {})
     } else {
       try { execSync(`ip link show ${ifName}`, { stdio: 'ignore' }) } catch { return }
-      execPrivileged([`wg-quick down "${configFile}"`])
+      await execPrivileged([`wg-quick down "${configFile}"`]).catch(() => {})
     }
   } catch (e) { console.warn('wgQuickDown failed', e) }
 
@@ -946,11 +1008,44 @@ async function setupWallet(mnemonic: string, label: string, rpc: string) {
 function withTimeout<T>(promise: Promise<T> | undefined, ms: number, msg: string): Promise<T> { if (!promise) return Promise.reject(new Error(msg)); return Promise.race([promise, new Promise<never>((_, rej) => setTimeout(() => rej(new Error(msg)), ms))]) }
 
 function checkBinaries() {
+  const custom = (store.get(STORE_KEY_BINARIES) as Record<string, string>) ?? {}
   const getHash = (p: string) => { try { const data = fs.readFileSync(p); return crypto.createHash('sha256').update(data).digest('hex') } catch { return null } }
-  const find = (n: string) => { try { const cmd = process.platform === 'win32' ? `where ${n}` : `which ${n}`; return execSync(cmd, { stdio: 'pipe' }).toString().trim().split('\n')[0] } catch { return null } }
+  const find = (n: string) => { 
+    if (custom[n] && fs.existsSync(custom[n])) return custom[n]
+    try { 
+      const cmd = process.platform === 'win32' ? `where ${n}` : `which ${n}`; 
+      return execSync(cmd, { stdio: 'pipe' }).toString().trim().split('\n')[0] 
+    } catch { 
+      if (process.platform === 'win32') {
+        if (n === 'wireguard.exe') {
+          const standardPath = 'C:\\Program Files\\WireGuard\\wireguard.exe'
+          if (fs.existsSync(standardPath)) return standardPath
+        }
+        // Fallback for v2ray and tun2socks if they are in the same folder as the app
+        const localPath = path.join(path.dirname(app.getPath('exe')), n)
+        if (fs.existsSync(localPath)) return localPath
+      }
+      return null 
+    } 
+  }
   const getDistro = () => { if (process.platform !== 'linux') return process.platform; try { const content = fs.readFileSync('/etc/os-release', 'utf8').toLowerCase(); if (content.includes('id=arch') || content.includes('id_like=arch')) return 'arch'; if (content.includes('id=ubuntu') || content.includes('id=debian') || content.includes('id_like=debian')) return 'debian'; if (content.includes('id=fedora') || content.includes('id=rhel') || content.includes('id_like=fedora')) return 'fedora'; if (content.includes('id=suse') || content.includes('id_like=suse')) return 'suse' } catch { } return 'linux' }
-  const wgName = process.platform === 'win32' ? 'wireguard.exe' : 'wg-quick'; const v2Path = find('v2ray'); const wgPath = find(wgName); const t2sPath = find('tun2socks')
-  return { wireguard: !!wgPath, wgPath, wgHash: wgPath ? getHash(wgPath) : null, v2ray: !!v2Path, v2rayPath: v2Path, v2rayHash: v2Path ? getHash(v2Path) : null, tun2socks: !!t2sPath, tun2socksPath: t2sPath, tun2socksHash: t2sPath ? getHash(t2sPath) : null, platform: process.platform, distro: getDistro() }
+  const wgName = process.platform === 'win32' ? 'wireguard.exe' : 'wg-quick'; 
+  const v2Name = process.platform === 'win32' ? 'v2ray.exe' : 'v2ray';
+  const t2sName = process.platform === 'win32' ? 'tun2socks.exe' : 'tun2socks';
+  
+  const v2Path = find(v2Name); const wgPath = find(wgName); const t2sPath = find(t2sName)
+  
+  let wintunFound = true
+  if (process.platform === 'win32' && t2sPath) {
+    wintunFound = fs.existsSync(path.join(path.dirname(t2sPath), 'wintun.dll'))
+  }
+
+  return { 
+    wireguard: !!wgPath, wgPath, wgHash: wgPath ? getHash(wgPath) : null, 
+    v2ray: !!v2Path, v2rayPath: v2Path, v2rayHash: v2Path ? getHash(v2Path) : null, 
+    tun2socks: !!t2sPath && wintunFound, tun2socksPath: t2sPath, tun2socksHash: t2sPath ? getHash(t2sPath) : null, 
+    platform: process.platform, distro: getDistro() 
+  }
 }
 
 async function killActiveConnections(sendEndSession = true) {
