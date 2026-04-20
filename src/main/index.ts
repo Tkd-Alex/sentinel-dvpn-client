@@ -212,7 +212,7 @@ function registerIpcHandlers(): void {
     return { success: true, path: filePaths[0] }
   })
   ipcMain.handle('binary:install', async (_e, cmd: string) => {
-    const res = execPrivileged([cmd])
+    const res = await execPrivileged([cmd])
     if (res.code === 0) return { success: true }
     return { success: false, error: res.stderr }
   })
@@ -806,12 +806,12 @@ async function applyKillSwitch(enable: boolean, ifNameOverride?: string): Promis
       ? [`iptables -I OUTPUT ! -o ${targetIf} -m mark ! --mark 0xca6c -j DROP`, `iptables -I OUTPUT -o lo -j ACCEPT`, `ip6tables -I OUTPUT ! -o ${targetIf} -j DROP`, `ip6tables -I OUTPUT -o lo -j ACCEPT`] 
       : [`iptables -D OUTPUT ! -o ${targetIf} -m mark ! --mark 0xca6c -j DROP || true`, `iptables -D OUTPUT -o lo -j ACCEPT || true`, `ip6tables -D OUTPUT ! -o ${targetIf} -j DROP || true`, `ip6tables -D OUTPUT -o lo -j ACCEPT || true`]
     
-    const res = execPrivileged(cmds)
+    const res = await execPrivileged(cmds)
     if (res.code !== 0 && enable) console.warn(`[KillSwitch] Linux apply failed: ${res.stderr}`)
   } else if (plat === 'darwin') {
     const rules = enable ? `block drop all\npass on lo0\npass on utun+\n` : `pass all\n`
     fs.writeFileSync('/tmp/sentinel-pf.conf', rules)
-    const res = execPrivileged([`pfctl -f /tmp/sentinel-pf.conf ${enable ? '-e' : '-d'} || true`])
+    const res = await execPrivileged([`pfctl -f /tmp/sentinel-pf.conf ${enable ? '-e' : '-d'} || true`])
     if (res.code !== 0 && enable) console.warn(`[KillSwitch] PF failed: ${res.stderr}`)
   } else if (plat === 'win32') {
     try {
