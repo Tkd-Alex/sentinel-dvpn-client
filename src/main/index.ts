@@ -274,6 +274,20 @@ function registerIpcHandlers(): void {
   })
 
   ipcMain.handle('wallet:hasMnemonic', () => getWalletList().length > 0)
+  ipcMain.handle('wallet:setup', async (_e, mnemonic: string, label?: string) => {
+    const rpc = (store.get(STORE_KEY_RPC) as string | undefined) ?? DEFAULT_RPC
+    const result = await setupWallet(mnemonic, label || 'Default', rpc)
+    if (result.success) {
+      const wallets = getWalletList()
+      const encrypted = encryptMnemonic(mnemonic.trim())
+      if (encrypted) {
+        wallets.push({ label: label || 'Default', encrypted })
+        store.set(STORE_KEY_WALLETS, wallets)
+        store.set(STORE_KEY_ACTIVE_W, wallets.length - 1)
+      }
+    }
+    return result
+  })
   ipcMain.handle('wallet:loadStored', async () => {
     const wallets = getWalletList()
     if (!wallets.length) return { success: false, error: 'No stored wallets' }
