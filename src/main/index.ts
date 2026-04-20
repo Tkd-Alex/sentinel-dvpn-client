@@ -677,9 +677,20 @@ async function doConnect(args: { nodeAddress: string; subscriptionType: 'gigabyt
 }
 
 function getNextWgInterface(): string {
+  const plat = process.platform
   for (let i = 0; i < 10; i++) {
     const ifName = `sentinel${i}`
-    try { execSync(`ip link show ${ifName}`, { stdio: 'ignore' }) } catch { return ifName }
+    try {
+      if (plat === 'win32') {
+        // On Windows, check if the WireGuard tunnel service already exists (non-privileged check)
+        execSync(`sc.exe query WireGuardTunnel$${ifName}`, { stdio: 'ignore' })
+      } else {
+        execSync(`ip link show ${ifName}`, { stdio: 'ignore' })
+      }
+    } catch {
+      // Command failed = service/interface does not exist, name is FREE
+      return ifName
+    }
   }
   return 'sentinel9'
 }
@@ -865,16 +876,18 @@ async function wgQuickUp(configFile: string): Promise<{ success: boolean; error?
   const isDnsError = (stderr: string) => 
     stderr.includes('resolvconf') || stderr.includes('resolve1') || stderr.includes('Failed to set DNS') || stderr.includes('DNS')
 
-  const run = () => {
+  const run = async () => {
     if (plat === 'win32') {
       const info = checkBinaries()
       const exe = info.wgPath || 'wireguard.exe'
-      return { code: execPrivileged([`"${exe}" /installtunnelservice "${configFile}"`]).code, stderr: '' }
+      // Use & "path" to handle spaces and quotes correctly in PowerShell
+      const res = await execPrivileged([`& "${exe}" /installtunnelservice "${configFile}"`])
+      return { code: res.code, stderr: res.stderr }
     }
-    return execPrivileged([`wg-quick up "${configFile}"`])
+    return await execPrivileged([`wg-quick up "${configFile}"`])
   }
 
-  let r1 = run()
+  let r1 = await run()
   if (r1.code === 0) {
     const settings = getSettings()
     if (settings.killSwitch) applyKillSwitch(true).catch(() => {})
@@ -886,7 +899,7 @@ async function wgQuickUp(configFile: string): Promise<{ success: boolean; error?
     mainWindow?.webContents.send('vpn:dns-retry-ask')
     await new Promise((res) => { ipcMain.once('vpn:dns-retry-approved', () => res(true)) })
     patchConfigFileForDns(configFile)
-    let r2 = run()
+    let r2 = await run()
     if (r2.code === 0) {
       startTrafficPolling()
       mainWindow?.webContents.send('vpn:warning', { message: 'Connected without DNS injection.' })
@@ -900,15 +913,17 @@ async function wgQuickUp(configFile: string): Promise<{ success: boolean; error?
 async function wgQuickDown(configFile: string): Promise<void> {
   const plat = process.platform
   const ifName = path.basename(configFile, '.conf')
+  stopTrafficPolling()
 
   try {
     if (plat === 'win32') {
       const info = checkBinaries()
       const exe = info.wgPath || 'wireguard.exe'
-      spawnSync(exe, ['/uninstalltunnelservice', ifName], { stdio: 'ignore' })
+      // Use execPrivileged for uninstall to trigger UAC
+      await execPrivileged([`& "${exe}" /uninstalltunnelservice "${ifName}"`]).catch(() => {})
     } else {
       try { execSync(`ip link show ${ifName}`, { stdio: 'ignore' }) } catch { return }
-      execPrivileged([`wg-quick down "${configFile}"`])
+      await execPrivileged([`wg-quick down "${configFile}"`]).catch(() => {})
     }
   } catch (e) { console.warn('wgQuickDown failed', e) }
 

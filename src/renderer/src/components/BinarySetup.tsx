@@ -157,64 +157,66 @@ export default function BinarySetup({ status, onDismiss, onRecheck, embedded = f
 
       <div className="binary-status-list">
         {GUIDES(current, t).map(g => (
-          <div key={g.id} className={`binary-row ${g.found ? 'ok' : 'missing'}`} style={{ flexDirection: 'column', alignItems: 'stretch', gap: 10 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <span className="binary-icon" style={{ fontSize: 18 }}>{g.icon}</span>
-              <div style={{ flex: 1 }}>
-                <div className="binary-name">{g.name}</div>
+          <div key={g.id} className={`binary-row ${g.found ? 'ok' : 'missing'}`} style={{ flexDirection: 'column', alignItems: 'stretch', gap: 6 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span className="binary-icon">{g.icon}</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div className="binary-name">{g.name}</div>
+                  <span className={`tag ${g.found ? 'tag-green' : 'tag-red'}`}>{g.found ? t('common.verified') : t('common.missing')}</span>
+                </div>
                 {g.found ? (
-                  <>
-                    <div style={{ fontSize: 9, color: 'var(--text-3)', marginTop: 2, fontFamily: 'var(--font-mono)', wordBreak: 'break-all' }}>
-                      PATH: {g.path}
-                    </div>
-                    {g.hash && (
-                      <div style={{ fontSize: 8, color: 'var(--text-4)', marginTop: 2, fontFamily: 'var(--font-mono)', opacity: 0.8 }}>
-                        SHA256: {g.hash}
-                      </div>
-                    )}
-                  </>
+                  <div className="binary-path" title={g.path ?? ''}>
+                    {g.path}
+                  </div>
                 ) : (
-                  <div className="binary-path">{t('binary.not_found')}</div>
+                  <div className="binary-path" style={{ color: 'var(--red)', opacity: 0.8 }}>{t('binary.not_found')}</div>
                 )}
               </div>
-              <span className={`tag ${g.found ? 'tag-green' : 'tag-red'}`}>{g.found ? t('common.verified') : t('common.missing')}</span>
+              
+              {/* Embedded mode browse button (compact) */}
+              {embedded && g.found && current.platform === 'win32' && (
+                 <button className="btn btn-secondary btn-xs" onClick={() => handleBrowse(g.id)}>
+                   {t('common.browse')}
+                 </button>
+              )}
             </div>
 
             {!g.found && (
-              <div style={{ borderTop: '1px solid var(--border)', paddingTop: 8 }}>
-                <button className="btn btn-secondary btn-sm btn-full" onClick={() => setExpanded(expanded === g.id ? null : g.id)}>
+              <div style={{ borderTop: '1px solid var(--border)', paddingTop: 6, marginTop: 2 }}>
+                <button className="btn btn-secondary btn-xs btn-full" onClick={() => setExpanded(expanded === g.id ? null : g.id)}>
                   {expanded === g.id ? `▲ ${t('binary.hide_guide')}` : `▼ ${t('binary.view_guide')}`}
                 </button>
                 {expanded === g.id && (
-                  <div style={{ marginTop: 12 }}>
-                    <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: 12, lineHeight: 1.6 }}>
+                  <div style={{ marginTop: 10 }}>
+                    <div style={{ fontSize: 10, color: 'var(--text-3)', marginBottom: 10, lineHeight: 1.5 }}>
                       {g.why}
                       {g.id === 'tun2socks' && current.platform === 'win32' && (
-                        <div style={{ marginTop: 8, color: 'var(--orange)', fontWeight: 600 }}>
+                        <div style={{ marginTop: 6, color: 'var(--orange)', fontWeight: 600, fontSize: 9 }}>
                           ⚠ {t('binary.wintun_missing')}
                           <br />
-                          <a href="https://www.wintun.net/" target="_blank" rel="noreferrer" style={{ color: 'var(--cyan)', fontSize: 10, textDecoration: 'underline' }}>
-                            https://www.wintun.net/
+                          <a href="https://www.wintun.net/" target="_blank" rel="noreferrer" style={{ color: 'var(--cyan)', textDecoration: 'underline' }}>
+                            wintun.net
                           </a>
                         </div>
                       )}
                     </div>
                     {current.platform === 'win32' ? (
-                      <div style={{ display: 'flex', gap: 10 }}>
-                        <a href={g.windows} target="_blank" rel="noreferrer" className="btn btn-primary btn-sm" style={{ flex: 1, textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <a href={g.windows} target="_blank" rel="noreferrer" className="btn btn-primary btn-xs" style={{ flex: 1, textDecoration: 'none' }}>
                           {t('binary.download_windows')}
                         </a>
-                        <button className="btn btn-secondary btn-sm" style={{ flex: 1 }} onClick={() => handleBrowse(g.id)}>
+                        <button className="btn btn-secondary btn-xs" style={{ flex: 1 }} onClick={() => handleBrowse(g.id)}>
                           📂 {t('common.browse')}
                         </button>
                       </div>
                     ) : (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                         {getFilteredSteps(g).map((step, i) => (
-                          <div key={i} style={{ background: 'var(--bg-0)', padding: 10, borderRadius: 4, border: '1px solid var(--border)' }}>
-                            <div style={{ fontSize: 9, color: 'var(--text-3)', marginBottom: 6, textTransform: 'uppercase' }}>{step.label}</div>
-                            <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-                              <code style={{ flex: 1, fontSize: 10, color: 'var(--cyan)' }}>{step.code}</code>
+                          <div key={i} style={{ background: 'var(--bg-0)', padding: 8, borderRadius: 4, border: '1px solid var(--border)' }}>
+                            <div style={{ fontSize: 8, color: 'var(--text-3)', marginBottom: 4, textTransform: 'uppercase' }}>{step.label}</div>
+                            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                              <code style={{ flex: 1, fontSize: 9, color: 'var(--cyan)', overflow: 'hidden', textOverflow: 'ellipsis' }}>{step.code}</code>
                               <ActionBtn code={step.code} onExec={handleExec} />
                             </div>
                           </div>
@@ -224,13 +226,6 @@ export default function BinarySetup({ status, onDismiss, onRecheck, embedded = f
                   </div>
                 )}
               </div>
-            )}
-            
-            {/* Embedded mode always allows browsing even if found (limited to Windows) */}
-            {embedded && g.found && current.platform === 'win32' && (
-               <button className="btn btn-secondary btn-xs" style={{ alignSelf: 'flex-start', marginTop: -4 }} onClick={() => handleBrowse(g.id)}>
-                 {t('common.browse')} (Change)
-               </button>
             )}
           </div>
         ))}
