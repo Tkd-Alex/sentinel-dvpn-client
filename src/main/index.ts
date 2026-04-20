@@ -31,6 +31,8 @@ import * as os from 'os'
 import * as dns from 'dns'
 import * as crypto from 'crypto'
 
+import { pingHelper } from './helper-client'
+
 // ── GasPrice shim ────────────────────────────────────────────────────────────
 function makeGasPrice(str: string): unknown {
   const sdkDir = require.resolve('@sentinel-official/sentinel-js-sdk').replace(/[/\\]dist[/\\].*/, '')
@@ -148,11 +150,14 @@ function createWindow(): void {
   }
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   electronApp.setAppUserModelId('com.sentinel.dvpn-client')
   app.on('browser-window-created', (_, w) => optimizer.watchWindowShortcuts(w))
   registerIpcHandlers()
   createWindow()
+
+  const alive = await pingHelper()
+  console.log('Helper alive:', alive)
 })
 
 app.on('window-all-closed', async () => {

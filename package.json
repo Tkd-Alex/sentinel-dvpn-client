@@ -14,7 +14,8 @@
     "dist:linux": "npm run build && electron-builder --linux",
     "dist:win": "npm run build && electron-builder --win",
     "dist:mac": "npm run build && electron-builder --mac",
-    "dist:all": "npm run build && electron-builder --linux --win --mac"
+    "dist:all": "npm run build && electron-builder --linux --win --mac",
+    "dev:helper": "ts-node --project helper/tsconfig.json helper/sentinel-helper.ts"
   },
   "dependencies": {
     "@cosmjs/proto-signing": "^0.32.4",
