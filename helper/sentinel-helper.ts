@@ -33,6 +33,10 @@ import process from 'process'
 /** Full Windows Named Pipe path. Must match the address used in Electron. */
 const PIPE_PATH = '\\\\.\\pipe\\sentinel-helper'
 
+/** TCP PIPE */
+const HELPER_HOST = '127.0.0.1'
+const HELPER_PORT = 47391
+
 /** Maximum number of simultaneous client connections accepted by the server.
  *  In practice only one Electron instance will connect at a time, but we allow
  *  a small backlog so reconnection attempts during restart do not get refused. */
@@ -40,6 +44,9 @@ const MAX_CONNECTIONS = 4
 
 /** Whether this process was launched by the Windows SCM via the --service flag. */
 const IS_SERVICE_MODE = process.argv.includes('--service')
+
+/** TCP or Named Pipe */
+const USE_NAMED_PIPE = process.argv.includes('--namedpipe')
 
 // ---------------------------------------------------------------------------
 // Types
@@ -272,10 +279,17 @@ function createPipeServer(): net.Server {
     }
   })
 
-  server.listen(PIPE_PATH, () => {
-    log('INFO', `Named Pipe server listening on ${PIPE_PATH}`)
-    log('INFO', `Mode: ${IS_SERVICE_MODE ? 'Windows Service (SCM)' : 'Standalone (dev)'}`)
-  })
+  if(USE_NAMED_PIPE === true){
+    server.listen(PIPE_PATH, () => {
+      log('INFO', `Named Pipe server listening on ${PIPE_PATH}`)
+      log('INFO', `Mode: ${IS_SERVICE_MODE ? 'Windows Service (SCM)' : 'Standalone (dev)'}`)
+    })
+  } else {
+    server.listen(HELPER_PORT, HELPER_HOST, () => {
+      log('INFO', `TCP server listening on ${HELPER_HOST}:${HELPER_PORT}`)
+      log('INFO', `Mode: ${IS_SERVICE_MODE ? 'Windows Service (SCM)' : 'Standalone (dev)'}`)
+    })
+  }
 
   return server
 }

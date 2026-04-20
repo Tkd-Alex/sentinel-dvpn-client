@@ -29,6 +29,9 @@ import net from 'net'
 /** Must exactly match PIPE_PATH in sentinel-helper.ts. */
 const PIPE_PATH = '\\\\.\\pipe\\sentinel-helper'
 
+const HELPER_HOST = '127.0.0.1'
+const HELPER_PORT = 47391
+
 /**
  * Default timeout in milliseconds for a single sendToHelper() call.
  * If the helper does not respond within this window the promise rejects with
@@ -82,6 +85,7 @@ export interface HelperResponse {
 export function sendToHelper(
   command: HelperCommand,
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
+  useNamedPipe: boolean = false,
 ): Promise<HelperResponse> {
   return new Promise((resolve) => {
     // ---- internal helpers ------------------------------------------------
@@ -125,7 +129,7 @@ export function sendToHelper(
 
     // ---- socket ----------------------------------------------------------
 
-    const socket = net.createConnection(PIPE_PATH)
+    const socket = useNamedPipe === true ? net.createConnection(PIPE_PATH) : net.createConnection(HELPER_PORT, HELPER_HOST)
     socket.setEncoding('utf8')
 
     /** Accumulates data chunks until a full newline-terminated line is received. */
@@ -175,6 +179,13 @@ export function sendToHelper(
           status: 'error',
           error:
             'Named Pipe not found. The SentinelHelper service is not running. ' +
+            'In development: start it with "npm run dev:helper" in an elevated terminal.',
+        })
+      } if (err.code === 'ECONNREFUSED') {
+        finish({
+          status: 'error',
+          error:
+            'Connection refused on 127.0.0.1:47391. The SentinelHelper service is not running. ' +
             'In development: start it with "npm run dev:helper" in an elevated terminal.',
         })
       } else {
