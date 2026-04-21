@@ -619,7 +619,10 @@ async function setupTransparentV2Ray(v2ray: V2Ray): Promise<{ success: boolean; 
       killSwitch: settings.killSwitch
     }, 60_000)
 
-    if (helperResponse.status === "ok") activeTun2Socks = helperResponse.pid as number
+    if (helperResponse.status === "ok") {
+      activeTun2Socks = helperResponse.pid as number
+      activeTunInterface = process.platform === 'win32' ? "sentinel-tun" : "sentun0"
+    }
     return { success: helperResponse.status === "ok" }
   } catch (err: any) { return { success: false, error: `Transparent setup failed: ${err.message}` } }
 }
