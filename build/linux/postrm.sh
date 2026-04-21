@@ -32,8 +32,10 @@ UNIT_FILE="/etc/systemd/system/sentinel-helper.service"
 # there is no connectivity gap. The new postinst will restart it.
 # ---------------------------------------------------------------------------
 
-ACTION="${1:-remove}"
-if [[ "${ACTION}" == "upgrade" || "${ACTION}" == "failed-upgrade" ]]; then
+ACTION=$1
+if [ -z "$ACTION" ]; then ACTION="remove"; fi
+
+if [[ "$ACTION" == "upgrade" || "$ACTION" == "failed-upgrade" ]]; then
   echo "[postrm] Upgrade in progress — skipping service teardown."
   exit 0
 fi
@@ -56,20 +58,20 @@ fi
 # Remove unit file and binary
 # ---------------------------------------------------------------------------
 
-if [[ -f "${UNIT_FILE}" ]]; then
-  rm -f "${UNIT_FILE}"
-  echo "[postrm] Removed unit file: ${UNIT_FILE}"
+if [[ -f "$UNIT_FILE" ]]; then
+  rm -f "$UNIT_FILE"
+  echo "[postrm] Removed unit file: $UNIT_FILE"
 fi
 
-if [[ -f "${HELPER_DEST}" ]]; then
-  rm -f "${HELPER_DEST}"
-  echo "[postrm] Removed binary: ${HELPER_DEST}"
+if [[ -f "$HELPER_DEST" ]]; then
+  rm -f "$HELPER_DEST"
+  echo "[postrm] Removed binary: $HELPER_DEST"
 fi
 
 # Remove the install directory only if it is now empty.
-if [[ -d "${INSTALL_DIR}" ]] && [[ -z "$(ls -A "${INSTALL_DIR}")" ]]; then
-  rmdir "${INSTALL_DIR}"
-  echo "[postrm] Removed empty directory: ${INSTALL_DIR}"
+if [[ -d "$INSTALL_DIR" ]] && [[ -z "$(ls -A "$INSTALL_DIR")" ]]; then
+  rmdir "$INSTALL_DIR"
+  echo "[postrm] Removed empty directory: $INSTALL_DIR"
 fi
 
 # Reload systemd so it forgets the now-removed unit.

@@ -28,19 +28,19 @@ set -euo pipefail
 # Adjust this to match your electron-builder productName / executableName.
 # electron-builder lowercases and replaces spaces with dashes by default.
 APP_NAME="sentinel-dvpn"
-RESOURCES_DIR="/opt/${APP_NAME}/resources"
+RESOURCES_DIR="/opt/$APP_NAME/resources"
 
-HELPER_SRC="${RESOURCES_DIR}/sentinel-helper"
+HELPER_SRC="$RESOURCES_DIR/sentinel-helper"
 INSTALL_DIR="/usr/local/lib/sentinel"
-HELPER_DEST="${INSTALL_DIR}/sentinel-helper"
+HELPER_DEST="$INSTALL_DIR/sentinel-helper"
 UNIT_FILE="/etc/systemd/system/sentinel-helper.service"
 
 # ---------------------------------------------------------------------------
 # Sanity check
 # ---------------------------------------------------------------------------
 
-if [[ ! -f "${HELPER_SRC}" ]]; then
-  echo "[postinst] Warning: sentinel-helper not found at ${HELPER_SRC}" >&2
+if [[ ! -f "$HELPER_SRC" ]]; then
+  echo "[postinst] Warning: sentinel-helper not found at $HELPER_SRC" >&2
   echo "[postinst] Skipping helper installation." >&2
   exit 0
 fi
@@ -49,16 +49,16 @@ fi
 # Install binary
 # ---------------------------------------------------------------------------
 
-mkdir -p "${INSTALL_DIR}"
-cp "${HELPER_SRC}" "${HELPER_DEST}"
-chmod 755 "${HELPER_DEST}"
-echo "[postinst] Installed sentinel-helper to ${HELPER_DEST}"
+mkdir -p "$INSTALL_DIR"
+cp "$HELPER_SRC" "$HELPER_DEST"
+chmod 755 "$HELPER_DEST"
+echo "[postinst] Installed sentinel-helper to $HELPER_DEST"
 
 # ---------------------------------------------------------------------------
 # Write systemd unit
 # ---------------------------------------------------------------------------
 
-cat > "${UNIT_FILE}" << EOF
+cat > "$UNIT_FILE" << EOF
 [Unit]
 Description=Sentinel Privileged Helper
 Documentation=https://github.com/sentinel-official/dvpn-node
@@ -68,7 +68,7 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
-ExecStart=${HELPER_DEST} --service
+ExecStart=$HELPER_DEST --service
 Restart=on-failure
 RestartSec=3s
 User=root
@@ -82,7 +82,7 @@ NoNewPrivileges=false
 WantedBy=multi-user.target
 EOF
 
-echo "[postinst] Unit file written to ${UNIT_FILE}"
+echo "[postinst] Unit file written to $UNIT_FILE"
 
 # ---------------------------------------------------------------------------
 # Enable and start the service
