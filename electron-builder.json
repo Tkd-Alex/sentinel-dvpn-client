@@ -29,5 +29,17 @@
     "allowToChangeInstallationDirectory": true,
     "perMachine": true,
     "include": "build/installer.nsh"
+  },
+  "deb": {
+    "afterInstall": "build/linux/postinst.sh",
+    "afterRemove":  "build/linux/postrm.sh"
+  },
+  "rpm": {
+    "afterInstall": "build/linux/postinst.sh",
+    "afterRemove":  "build/linux/postrm.sh"
+  },
+  "pacman": {
+    "afterInstall": "build/linux/postinst.sh",
+    "afterRemove":  "build/linux/postrm.sh"
   }
 }
