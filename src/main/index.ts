@@ -999,27 +999,54 @@ function checkBinaries() {
       }
       return targetPath
     }
-    try { 
-      const cmd = process.platform === 'win32' ? `where ${n}` : `which ${n}`; 
+    try {
+      const cmd = process.platform === 'win32' ? `where ${n}` : `which ${n}`;
       const found = execSync(cmd, { stdio: 'pipe' }).toString().trim().split('\n')[0]
       console.log(`[BinaryCheck] Found ${n} in PATH: ${found}`)
       return found
-    } catch { 
+    } catch {
       if (process.platform === 'win32') {
         if (n === 'wireguard.exe') {
           const standardPath = 'C:\\Program Files\\WireGuard\\wireguard.exe'
           if (fs.existsSync(standardPath)) return standardPath
         }
-        // Fallback for v2ray and tun2socks if they are in the same folder as the app
-        const localPath = path.join(path.dirname(app.getPath('exe')), n)
-        if (fs.existsSync(localPath)) {
-          console.log(`[BinaryCheck] Found ${n} in local app folder: ${localPath}`)
-          return localPath
+        // Windows fallback search paths. Users commonly have v2ray/tun2socks
+        // extracted into per-app folders rather than on PATH. Scan a prioritized
+        // list of standard install locations before giving up.
+        const appDir = path.dirname(app.getPath('exe'))
+        const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local')
+        const programFiles = process.env.ProgramFiles || 'C:\\Program Files'
+        const programFilesX86 = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)'
+        const userHome = os.homedir()
+        const base = path.basename(n, '.exe') // "v2ray" | "tun2socks" | "wireguard"
+
+        const fallbackDirs = [
+          appDir,                                                    // legacy: next to client exe
+          path.join(appDir, 'bin'),                                  // client's bin/ sibling
+          path.join(localAppData, 'sentinel-dvpn-client', 'bin'),    // client-managed
+          path.join(localAppData, 'Programs', base),                 // winget/scoop-style
+          path.join(localAppData, 'Programs', base, 'bin'),
+          path.join(programFiles, base),                             // "C:\Program Files\v2ray\"
+          path.join(programFiles, base, 'bin'),
+          path.join(programFilesX86, base),
+          path.join(programFilesX86, base, 'bin'),
+          path.join(userHome, 'scoop', 'apps', base, 'current'),     // scoop
+          path.join(userHome, 'scoop', 'shims'),
+          `C:\\tools\\${base}`,                                      // chocolatey-style
+          `C:\\${base}`,                                             // manual extract to root
+        ]
+
+        for (const dir of fallbackDirs) {
+          const candidate = path.join(dir, n)
+          if (fs.existsSync(candidate)) {
+            console.log(`[BinaryCheck] Found ${n} at fallback location: ${candidate}`)
+            return candidate
+          }
         }
       }
       console.warn(`[BinaryCheck] ${n} NOT FOUND`)
-      return null 
-    } 
+      return null
+    }
   }
   const getDistro = () => { if (process.platform !== 'linux') return process.platform; try { const content = fs.readFileSync('/etc/os-release', 'utf8').toLowerCase(); if (content.includes('id=arch') || content.includes('id_like=arch')) return 'arch'; if (content.includes('id=ubuntu') || content.includes('id=debian') || content.includes('id_like=debian')) return 'debian'; if (content.includes('id=fedora') || content.includes('id=rhel') || content.includes('id_like=fedora')) return 'fedora'; if (content.includes('id=suse') || content.includes('id_like=suse')) return 'suse' } catch { } return 'linux' }
   const wgName = process.platform === 'win32' ? 'wireguard.exe' : 'wg-quick'; 
@@ -1030,7 +1057,15 @@ function checkBinaries() {
   
   let wintunFound = true
   if (process.platform === 'win32' && t2sPath) {
-    wintunFound = fs.existsSync(path.join(path.dirname(t2sPath), 'wintun.dll'))
+    // wintun.dll is needed for tun2socks to create the Wintun adapter. It can
+    // live next to tun2socks, next to wireguard.exe (WireGuard bundles it),
+    // or in System32 if installed system-wide.
+    const wintunCandidates = [
+      path.join(path.dirname(t2sPath), 'wintun.dll'),
+      'C:\\Program Files\\WireGuard\\wintun.dll',
+      path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'wintun.dll'),
+    ]
+    wintunFound = wintunCandidates.some(p => fs.existsSync(p))
   }
 
   return { 
