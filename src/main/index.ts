@@ -530,7 +530,7 @@ function registerIpcHandlers(): void {
     v2rayPid: activeV2Ray?.child?.pid,
     wgActive: !!activeWgConfigFile, 
     wgInterface: activeWgConfigFile ? path.basename(activeWgConfigFile, '.conf') : null,
-    tunActive: !!activeTun2Socks,
+    tunActive: activeTun2Socks !== null,
     tunPid: activeTun2Socks,
     tunInterface: activeTunInterface,
     sessionId: activeSessionId, 
@@ -974,12 +974,12 @@ async function killActiveConnections(sendEndSession = true) {
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
 
   // Disable Kill Switch immediately to restore local connectivity during teardown
-  try { await applyKillSwitch(false) } catch (e) { console.warn('[Teardown] Failed to disable Kill Switch', e) }
+  // try { await applyKillSwitch(false) } catch (e) { console.warn('[Teardown] Failed to disable Kill Switch', e) }
 
   if (sendEndSession && activeSessionId && walletState.client && walletState.address) {
     try { await walletState.client.signAndBroadcast(walletState.address, [sessionCancel({ from: walletState.address, id: Long.fromString(activeSessionId, true) })], 'auto', 'sentinel-dvpn-client') } catch { }
   }
-  if (activeTun2Socks) {
+  if (activeTun2Socks !== null) {
     const helperResponse = await sendToHelper({ command: 'stop-transparent' })
     if(helperResponse.status === "ok"){ activeTun2Socks = null; activeTunInterface = null; activeV2RayServerIp = null}
   }
