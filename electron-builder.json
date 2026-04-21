@@ -7,8 +7,13 @@
   "icon": "build/icon.png",
   "linux": {
     "target": ["deb", "AppImage", "pacman", "rpm"],
-    "category": "Network",
-    "icon": "build/icon.png"
+    "icon": "build/icon.png",
+    "extraResources": [
+      {
+        "from": "dist-helper/sentinel-helper",
+        "to": "sentinel-helper"
+      }
+    ]
   },
   "mac": {
     "target": ["dmg"],
@@ -21,6 +26,15 @@
   },
   "nsis": {
     "oneClick": false,
-    "allowToChangeInstallationDirectory": true
-  }
+    "allowToChangeInstallationDirectory": true,
+    "perMachine": true,
+    "include": "build/installer.nsh"
+  },
+  "extraResources": [
+    {
+      "filter": ["**/*"],
+      "from": "dist-helper/sentinel-helper.exe",
+      "to": "sentinel-helper.exe"
+    }
+  ]
 }

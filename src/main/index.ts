@@ -24,7 +24,7 @@ import { DirectSecp256k1HdWallet } from '@cosmjs/proto-signing'
 import { assertIsDeliverTxSuccess } from '@cosmjs/stargate'
 import Long from 'long'
 import QRCode from 'qrcode'
-import { spawn, spawnSync, execSync, type ChildProcess } from 'child_process'
+import { execFile, spawn, spawnSync, execSync, type ChildProcess } from 'child_process'
 import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
@@ -154,6 +154,10 @@ app.whenReady().then(async () => {
   electronApp.setAppUserModelId('com.sentinel.dvpn-client')
   app.on('browser-window-created', (_, w) => optimizer.watchWindowShortcuts(w))
   registerIpcHandlers()
+
+  const alive = await pingHelper()
+  if (!alive && process.platform === 'linux') await installLinuxHelper()
+
   createWindow()
 })
 
@@ -161,6 +165,44 @@ app.on('window-all-closed', async () => {
   await killActiveConnections(true)
   if (process.platform !== 'darwin') app.quit()
 })
+
+async function installLinuxHelper(): Promise<void> {
+  const resourcesPath = app.isPackaged
+    ? process.resourcesPath
+    : path.join(__dirname, '..', '..', 'dist-helper')
+
+  const helperSrc  = path.join(resourcesPath, 'sentinel-helper')
+  const installDir = '/usr/local/lib/sentinel'
+  const helperDest = `${installDir}/sentinel-helper`
+
+  const unitContent = [
+    '[Unit]',
+    'Description=Sentinel Privileged Helper',
+    'After=network.target',
+    '[Service]',
+    'Type=simple',
+    `ExecStart=${helperDest} --service`,
+    'Restart=on-failure',
+    'RestartSec=3s',
+    'User=root',
+    '[Install]',
+    'WantedBy=multi-user.target',
+  ].join('\\n')
+
+  const result = await execPrivileged([
+    `mkdir -p ${installDir}`,
+    `cp ${helperSrc} ${helperDest}`,
+    `chmod 755 ${helperDest}`,
+    `printf '${unitContent}' > /etc/systemd/system/sentinel-helper.service`,
+    `systemctl daemon-reload`,
+    `systemctl enable sentinel-helper`,
+    `systemctl start sentinel-helper`,
+  ])
+
+  if (result.code !== 0) {
+    throw new Error(`Helper installation failed: ${result.stderr}`)
+  }
+}
 
 function registerIpcHandlers(): void {
   ipcMain.handle('window:minimize', () => mainWindow?.minimize())
