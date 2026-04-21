@@ -834,8 +834,8 @@ async function wgQuickUp(configFile: string): Promise<{ success: boolean; error?
 
   let r1 = await run()
   if (r1.code === 0) {
-    const settings = getSettings()
-    if (settings.killSwitch) applyKillSwitch(true).catch(() => {})
+    // const settings = getSettings()
+    // if (settings.killSwitch) applyKillSwitch(true).catch(() => {})
     startTrafficPolling()
     return { success: true }
   }
