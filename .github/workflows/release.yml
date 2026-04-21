@@ -20,10 +20,19 @@ jobs:
         include:
           - os: ubuntu-latest
             platform: linux
+            pkg_target: node18-linux-x64
+            helper_output: dist-helper/sentinel-helper       # no .exe on Linux
           - os: windows-latest
             platform: win
+            pkg_target: node18-win-x64
+            helper_output: dist-helper/sentinel-helper.exe
           - os: macos-latest
             platform: mac
+            # macOS helper not yet implemented — matrix entry kept so the Mac
+            # Electron app still builds and releases. Remove pkg_target when
+            # the macOS handler is added to sentinel-helper.ts.
+            pkg_target: ""
+            helper_output: ""
 
     runs-on: ${{ matrix.os }}
 
@@ -40,15 +49,45 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # -----------------------------------------------------------------------
+      # Linux build dependencies (rpm, AppImage tools, fakeroot)
+      # -----------------------------------------------------------------------
       - name: Install Linux build dependencies
         if: matrix.platform == 'linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y rpm libarchive-tools fakeroot
 
+      # -----------------------------------------------------------------------
+      # Build the privileged helper binary with pkg.
+      #
+      # pkg compiles sentinel-helper.ts (via the pre-compiled JS in dist-helper/)
+      # into a self-contained native executable — no Node.js needed on the user's
+      # machine. The output lands in dist-helper/ where electron-builder picks it
+      # up via extraResources.
+      #
+      # macOS: skipped until the macOS platform handler is implemented.
+      # -----------------------------------------------------------------------
+      - name: Build privileged helper (Windows)
+        if: matrix.platform == 'win'
+        run: npm run build:helper:win
+
+      - name: Build privileged helper (Linux)
+        if: matrix.platform == 'linux'
+        run: npm run build:helper:linux
+
+      # -----------------------------------------------------------------------
+      # Build the main Electron JS bundles (Vite / webpack / tsc, whatever
+      # your existing "build" script does).
+      # -----------------------------------------------------------------------
       - name: Build JS bundles
         run: npm run build
 
+      # -----------------------------------------------------------------------
+      # Package and publish. electron-builder reads extraResources from
+      # electron-builder.json and includes the helper binary automatically.
+      # The NSIS installer.nsh hooks register the Windows Service at install time.
+      # -----------------------------------------------------------------------
       - name: Build & Publish to GitHub Releases
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

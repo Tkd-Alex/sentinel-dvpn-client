@@ -32,6 +32,11 @@ Full internationalization support for **9 languages** with dynamic switching:
 - **Split Tunneling**: Route only specific subnets through the VPN (WireGuard).
 - **DNS over HTTPS (DoH)**: Custom DNS resolver support (Cloudflare, Google, NextDNS, etc.).
 
+### 🛡️ Privileged Operations & Security
+To ensure a seamless experience without constant interruptions, the application uses a **Privileged Helper** service for advanced networking tasks (Routing, Kill Switch, Transparent Proxy).
+- **Linux**: Upon the first launch, you may be asked for your administrative password once. This is to install a `systemd` service that allows the app to manage VPN tunnels securely.
+- **Windows**: The installer automatically configures a **Scheduled Task** running as `SYSTEM`. This ensures that VPN operations can be performed without repeated UAC prompts every time you connect.
+
 ---
 
 ## 🛠️ Architecture & Flow

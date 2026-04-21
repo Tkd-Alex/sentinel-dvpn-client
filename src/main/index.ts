@@ -24,12 +24,14 @@ import { DirectSecp256k1HdWallet } from '@cosmjs/proto-signing'
 import { assertIsDeliverTxSuccess } from '@cosmjs/stargate'
 import Long from 'long'
 import QRCode from 'qrcode'
-import { spawn, spawnSync, execSync, type ChildProcess } from 'child_process'
+import { execFile, spawn, spawnSync, execSync, type ChildProcess } from 'child_process'
 import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
 import * as dns from 'dns'
 import * as crypto from 'crypto'
+
+import { pingHelper, sendToHelper } from './helper-client'
 
 // ── GasPrice shim ────────────────────────────────────────────────────────────
 function makeGasPrice(str: string): unknown {
@@ -115,7 +117,7 @@ let walletState: {
 let activeWgInstance:   Wireguard | null = null
 let activeWgConfigFile: string | null    = null
 let activeV2Ray:        V2Ray | null     = null
-let activeTun2Socks:    ChildProcess | null = null
+let activeTun2Socks:    number | null = null
 let activeTunInterface: string | null    = null
 let activeV2RayServerIp: string | null    = null
 let activeSessionId:    string | null    = null
@@ -148,10 +150,14 @@ function createWindow(): void {
   }
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   electronApp.setAppUserModelId('com.sentinel.dvpn-client')
   app.on('browser-window-created', (_, w) => optimizer.watchWindowShortcuts(w))
   registerIpcHandlers()
+
+  const alive = await pingHelper()
+  if (!alive && process.platform === 'linux') await installLinuxHelper()
+
   createWindow()
 })
 
@@ -159,6 +165,51 @@ app.on('window-all-closed', async () => {
   await killActiveConnections(true)
   if (process.platform !== 'darwin') app.quit()
 })
+
+async function installLinuxHelper(): Promise<void> {
+  const resourcesPath = app.isPackaged
+    ? process.resourcesPath
+    : path.join(__dirname, '..', '..', 'dist-helper')
+
+  const helperSrc  = path.join(resourcesPath, 'sentinel-helper')
+  const installDir = '/usr/local/lib/sentinel'
+  const helperDest = `${installDir}/sentinel-helper`
+
+  // Copy to /tmp first — /tmp is readable by root even from FUSE mount.
+  // The file in /tmp is removed by the privileged script after copying.
+  const tmpPath = `/tmp/sentinel-helper-setup-${Date.now()}`
+  fs.copyFileSync(helperSrc, tmpPath)
+  fs.chmodSync(tmpPath, 0o755)
+
+  const unitContent = [
+    '[Unit]',
+    'Description=Sentinel Privileged Helper',
+    'After=network.target',
+    '[Service]',
+    'Type=simple',
+    `ExecStart=${helperDest} --service`,
+    'Restart=on-failure',
+    'RestartSec=3s',
+    'User=root',
+    '[Install]',
+    'WantedBy=multi-user.target',
+  ].join('\\n')
+
+  const result = await execPrivileged([
+    `mkdir -p ${installDir}`,
+    `cp ${tmpPath} ${helperDest}`,
+    `chmod 755 ${helperDest}`,
+    `rm -f ${tmpPath}`,
+    `printf '${unitContent}' > /etc/systemd/system/sentinel-helper.service`,
+    `systemctl daemon-reload`,
+    `systemctl enable sentinel-helper`,
+    `systemctl start sentinel-helper`,
+  ])
+
+  if (result.code !== 0) {
+    throw new Error(`Helper installation failed: ${result.stderr}`)
+  }
+}
 
 function registerIpcHandlers(): void {
   ipcMain.handle('window:minimize', () => mainWindow?.minimize())
@@ -507,7 +558,7 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('killswitch:enable', async () => {
     try {
-      await applyKillSwitch(true)
+      await sendToHelper({ command: 'set-kill-switch', enabled: true })
       return { success: true }
     } catch (err: unknown) {
       return { success: false, error: String(err) }
@@ -516,7 +567,7 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('killswitch:disable', async () => {
     try {
-      await applyKillSwitch(false)
+      await sendToHelper({ command: 'set-kill-switch', enabled: false })
       return { success: true }
     } catch (err: unknown) {
       return { success: false, error: String(err) }
@@ -528,8 +579,8 @@ function registerIpcHandlers(): void {
     v2rayPid: activeV2Ray?.child?.pid,
     wgActive: !!activeWgConfigFile, 
     wgInterface: activeWgConfigFile ? path.basename(activeWgConfigFile, '.conf') : null,
-    tunActive: !!activeTun2Socks,
-    tunPid: activeTun2Socks?.pid,
+    tunActive: activeTun2Socks !== null,
+    tunPid: activeTun2Socks,
     tunInterface: activeTunInterface,
     sessionId: activeSessionId, 
     nodeAddress: activeNodeAddress
@@ -549,7 +600,6 @@ function getNextTunInterface(): string {
 }
 
 async function setupTransparentV2Ray(v2ray: V2Ray): Promise<{ success: boolean; error?: string }> {
-  const plat = process.platform
   const socksPort = v2ray.config.inbounds.find((ib: any) => ib.protocol === 'socks')?.port
   if (!socksPort) return { success: false, error: 'V2Ray SOCKS5 port not found' }
 
@@ -566,61 +616,21 @@ async function setupTransparentV2Ray(v2ray: V2Ray): Promise<{ success: boolean; 
     }
     activeV2RayServerIp = serverIp
 
-    if (plat === 'linux') {
-      const gwInfo = execSync("ip route show default | grep -v sentinel | head -n1").toString().trim().split(' ')
-      const gateway = gwInfo[2]; const iface = gwInfo[4]
-      const tunName = getNextTunInterface()
-      activeTunInterface = tunName
-      
-      const setupCmds = [
-        `ip tuntap add dev ${tunName} mode tun`,
-        `ip addr add 10.0.0.1/24 dev ${tunName}`,
-        `ip link set dev ${tunName} up`,
-        `ip route add ${serverIp} via ${gateway} dev ${iface}`,
-        `ip route add 0.0.0.0/1 dev ${tunName}`,
-        `ip route add 128.0.0.0/1 dev ${tunName}`
-      ]
+    const binaries = checkBinaries()
+    const settings = getSettings()
+    const helperResponse = await sendToHelper({
+      command: 'start-transparent',
+      tun2socksPath: binaries.tun2socksPath!,
+      socksPort: socksPort,
+      serverIp: activeV2RayServerIp,
+      killSwitch: settings.killSwitch
+    }, 60_000)
 
-      try {
-        execPrivileged(setupCmds)
-        const bin = findPrivEscBin()
-        activeTun2Socks = spawn(bin === 'osascript' ? 'sudo' : bin, ['tun2socks', '-device', tunName, '-proxy', `socks5://127.0.0.1:${socksPort}`])
-      } catch (e: any) {
-        throw new Error(`System commands failed: ${e.message}`)
-      }
-      const settings = getSettings()
-      if (settings.killSwitch) applyKillSwitch(true, tunName).catch(() => {})
-    } else if (plat === 'darwin') {
-      const gateway = execSync("netstat -rn | grep 'default' | head -n1 | awk '{print $2}'").toString().trim()
-      activeTunInterface = 'utun10'
-      const setupCmds = [
-        `route add ${serverIp} ${gateway}`,
-        `ifconfig ${activeTunInterface} 10.0.0.1 10.0.0.2 up`,
-        `route add -net 0.0.0.0/1 -interface ${activeTunInterface}`,
-        `route add -net 128.0.0.0/1 -interface ${activeTunInterface}`
-      ]
-      try {
-        execPrivileged(setupCmds)
-        // Spawn tun2socks using sudo (osascript is only for shell strings, not for persistent spawns)
-        // Since we just ran execPrivileged, the credentials might be cached in sudo
-        activeTun2Socks = spawn('sudo', ['tun2socks', '-device', activeTunInterface, '-proxy', `socks5://127.0.0.1:${socksPort}`])
-      } catch (e: any) {
-        throw new Error(`macOS setup failed: ${e.message}`)
-      }
-      const settings = getSettings()
-      if (settings.killSwitch) applyKillSwitch(true, activeTunInterface).catch(() => {})
-    } else if (plat === 'win32') {
-      activeTunInterface = 'sentinel-tun'
-      execSync(`route add ${serverIp} mask 255.255.255.255 0.0.0.0 METRIC 1`, { stdio: 'ignore' })
-      activeTun2Socks = spawn('tun2socks.exe', ['-device', activeTunInterface, '-proxy', `socks5://127.0.0.1:${socksPort}`])
-      await new Promise(r => setTimeout(r, 1000))
-      execSync(`netsh interface ipv4 set address name="${activeTunInterface}" source=static addr=10.0.0.1 mask=255.255.255.0 gateway=none`, { stdio: 'ignore' })
-      execSync(`route add 0.0.0.0 mask 128.0.0.0 10.0.0.1 METRIC 5`, { stdio: 'ignore' })
-      execSync(`route add 128.0.0.0 mask 128.0.0.0 10.0.0.1 METRIC 5`, { stdio: 'ignore' })
-      const settings = getSettings()
-      if (settings.killSwitch) applyKillSwitch(true, activeTunInterface).catch(() => {})
+    if (helperResponse.status === "ok") {
+      activeTun2Socks = helperResponse.pid as number
+      activeTunInterface = process.platform === 'win32' ? "sentinel-tun" : "sentun0"
     }
-    return { success: true }
+    return { success: helperResponse.status === "ok" }
   } catch (err: any) { return { success: false, error: `Transparent setup failed: ${err.message}` } }
 }
 
@@ -726,6 +736,7 @@ async function doHandshake(nodeAddress: string, sessionId: Long) {
 
     if (nInfo.service_type === NodeVPNType.V2RAY) {
       if (activeV2Ray) { try { activeV2Ray.disconnect() } catch (_) {}; activeV2Ray = null }
+      checkBinaries()
       const v2ray = new V2Ray(); const result = await handshake(sessionId, { uuid: v2ray.getKey() }, walletState.privkey!, remoteAddr).catch(e => { throw new Error(`[handshake] ${extractError(e)}`) })
       const hd = JSON.parse(Buffer.from(result.data, 'base64').toString('utf8')); await v2ray.parseConfig(hd, result.addrs)
       const shareLinks = v2ray.buildShareLinks(`sentinel-${nodeAddress.slice(-8)}`)
@@ -788,43 +799,6 @@ function startTrafficPolling() {
   trafficInterval = setInterval(async () => { const stats = await getTrafficStats(); mainWindow?.webContents.send('traffic:update', stats) }, 2000)
 }
 
-async function applyKillSwitch(enable: boolean, ifNameOverride?: string): Promise<void> {
-  let ifName = ifNameOverride
-  if (!ifName) {
-    if (activeWgConfigFile) ifName = path.basename(activeWgConfigFile, '.conf')
-    else if (activeTunInterface) ifName = activeTunInterface
-  }
-  if (!ifName && enable) {
-    console.warn('[KillSwitch] No active interface to protect. Skipping apply.')
-    return
-  }
-
-  const plat = process.platform
-  if (plat === 'linux') {
-    const targetIf = ifName || 'sentinel+'
-    const cmds = enable 
-      ? [`iptables -I OUTPUT ! -o ${targetIf} -m mark ! --mark 0xca6c -j DROP`, `iptables -I OUTPUT -o lo -j ACCEPT`, `ip6tables -I OUTPUT ! -o ${targetIf} -j DROP`, `ip6tables -I OUTPUT -o lo -j ACCEPT`] 
-      : [`iptables -D OUTPUT ! -o ${targetIf} -m mark ! --mark 0xca6c -j DROP || true`, `iptables -D OUTPUT -o lo -j ACCEPT || true`, `ip6tables -D OUTPUT ! -o ${targetIf} -j DROP || true`, `ip6tables -D OUTPUT -o lo -j ACCEPT || true`]
-    
-    const res = await execPrivileged(cmds)
-    if (res.code !== 0 && enable) console.warn(`[KillSwitch] Linux apply failed: ${res.stderr}`)
-  } else if (plat === 'darwin') {
-    const rules = enable ? `block drop all\npass on lo0\npass on utun+\n` : `pass all\n`
-    fs.writeFileSync('/tmp/sentinel-pf.conf', rules)
-    const res = await execPrivileged([`pfctl -f /tmp/sentinel-pf.conf ${enable ? '-e' : '-d'} || true`])
-    if (res.code !== 0 && enable) console.warn(`[KillSwitch] PF failed: ${res.stderr}`)
-  } else if (plat === 'win32') {
-    try {
-      if (enable) {
-        // Add rules (KillSwitch: block all, but allow VPN traffic)
-        execSync('netsh advfirewall firewall add rule name="SentinelKS" dir=out action=block & netsh advfirewall firewall add rule name="SentinelKS-VPN" dir=out action=allow interface=any', { stdio: 'ignore' })
-      } else {
-        // Delete rules silently
-        execSync('netsh advfirewall firewall delete rule name="SentinelKS" & netsh advfirewall firewall delete rule name="SentinelKS-VPN" & exit 0', { stdio: 'ignore' })
-      }
-    } catch (e) { console.warn(`[KillSwitch] Windows Firewall failed`, e) }
-  }
-}
 
 async function execPrivileged(cmds: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
   const plat = process.platform
@@ -913,8 +887,8 @@ async function wgQuickUp(configFile: string): Promise<{ success: boolean; error?
 
   let r1 = await run()
   if (r1.code === 0) {
-    const settings = getSettings()
-    if (settings.killSwitch) applyKillSwitch(true).catch(() => {})
+    // const settings = getSettings()
+    // if (settings.killSwitch) applyKillSwitch(true).catch(() => {})
     startTrafficPolling()
     return { success: true }
   }
@@ -1011,10 +985,25 @@ function checkBinaries() {
   const custom = (store.get(STORE_KEY_BINARIES) as Record<string, string>) ?? {}
   const getHash = (p: string) => { try { const data = fs.readFileSync(p); return crypto.createHash('sha256').update(data).digest('hex') } catch { return null } }
   const find = (n: string) => { 
-    if (custom[n] && fs.existsSync(custom[n])) return custom[n]
+    // Check custom path with and without .exe
+    const nameWithoutExe = n.replace(/\.exe$/i, '')
+    const targetPath = custom[n] || custom[nameWithoutExe]
+    
+    if (targetPath && fs.existsSync(targetPath)) {
+      console.log(`[BinaryCheck] Using custom path for ${n}: ${targetPath}`)
+      // Robust fix: Add the directory of the custom binary to the PATH
+      const binDir = path.dirname(targetPath)
+      if (process.platform === 'win32' && !process.env.PATH?.includes(binDir)) {
+        process.env.PATH = `${binDir};${process.env.PATH}`
+        console.log(`[BinaryCheck] Added to PATH: ${binDir}`)
+      }
+      return targetPath
+    }
     try { 
       const cmd = process.platform === 'win32' ? `where ${n}` : `which ${n}`; 
-      return execSync(cmd, { stdio: 'pipe' }).toString().trim().split('\n')[0] 
+      const found = execSync(cmd, { stdio: 'pipe' }).toString().trim().split('\n')[0]
+      console.log(`[BinaryCheck] Found ${n} in PATH: ${found}`)
+      return found
     } catch { 
       if (process.platform === 'win32') {
         if (n === 'wireguard.exe') {
@@ -1023,8 +1012,12 @@ function checkBinaries() {
         }
         // Fallback for v2ray and tun2socks if they are in the same folder as the app
         const localPath = path.join(path.dirname(app.getPath('exe')), n)
-        if (fs.existsSync(localPath)) return localPath
+        if (fs.existsSync(localPath)) {
+          console.log(`[BinaryCheck] Found ${n} in local app folder: ${localPath}`)
+          return localPath
+        }
       }
+      console.warn(`[BinaryCheck] ${n} NOT FOUND`)
       return null 
     } 
   }
@@ -1051,42 +1044,16 @@ function checkBinaries() {
 async function killActiveConnections(sendEndSession = true) {
   if (trafficInterval) { clearInterval(trafficInterval); trafficInterval = null }
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
-  
+
   // Disable Kill Switch immediately to restore local connectivity during teardown
-  try { await applyKillSwitch(false) } catch (e) { console.warn('[Teardown] Failed to disable Kill Switch', e) }
+  // try { await applyKillSwitch(false) } catch (e) { console.warn('[Teardown] Failed to disable Kill Switch', e) }
 
   if (sendEndSession && activeSessionId && walletState.client && walletState.address) {
     try { await walletState.client.signAndBroadcast(walletState.address, [sessionCancel({ from: walletState.address, id: Long.fromString(activeSessionId, true) })], 'auto', 'sentinel-dvpn-client') } catch { }
   }
-  if (activeTun2Socks) {
-    const plat = process.platform
-    if (plat === 'linux' && activeTunInterface) {
-      const cleanupCmds = [
-        `kill ${activeTun2Socks.pid} || true`, 
-        `ip route del 0.0.0.0/1 dev ${activeTunInterface} || true`, 
-        `ip route del 128.0.0.0/1 dev ${activeTunInterface} || true`, 
-        activeV2RayServerIp ? `ip route del ${activeV2RayServerIp} || true` : `true`, 
-        `ip link set dev ${activeTunInterface} down || true`, 
-        `ip tuntap del dev ${activeTunInterface} mode tun || true`
-      ]
-      try { execPrivileged(cleanupCmds) } catch (e) { console.warn('Linux cleanup failed', e) }
-    } else if (plat === 'darwin' && activeTunInterface) {
-      const cleanupCmds = [
-        `kill ${activeTun2Socks.pid} || true`,
-        `route delete 0.0.0.0/1 || true`,
-        `route delete 128.0.0.0/1 || true`,
-        activeV2RayServerIp ? `route delete ${activeV2RayServerIp} || true` : `true`
-      ]
-      try { execPrivileged(cleanupCmds) } catch (e) { console.warn('macOS cleanup failed', e) }
-    } else if (plat === 'win32') {
-      try { 
-        activeTun2Socks.kill()
-        execSync(`route delete 0.0.0.0 mask 128.0.0.0`, { stdio: 'ignore' })
-        execSync(`route delete 128.0.0.0 mask 128.0.0.0`, { stdio: 'ignore' })
-        if (activeV2RayServerIp) execSync(`route delete ${activeV2RayServerIp}`, { stdio: 'ignore' })
-      } catch (e) { console.warn('Windows cleanup failed', e) }
-    } else { activeTun2Socks.kill() }
-    activeTun2Socks = null; activeTunInterface = null; activeV2RayServerIp = null
+  if (activeTun2Socks !== null) {
+    const helperResponse = await sendToHelper({ command: 'stop-transparent' })
+    if(helperResponse.status === "ok"){ activeTun2Socks = null; activeTunInterface = null; activeV2RayServerIp = null}
   }
   if (activeV2Ray) { try { activeV2Ray.disconnect() } catch { }; activeV2Ray = null }
   if (activeWgConfigFile) { await wgQuickDown(activeWgConfigFile); activeWgConfigFile = null; activeWgInstance = null }
