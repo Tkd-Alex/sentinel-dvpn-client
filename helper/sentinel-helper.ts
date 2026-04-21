@@ -76,6 +76,16 @@ const TUN_WAIT_TIMEOUT_MS = 20_000
 /** Interval between TUN adapter existence checks in milliseconds. */
 const TUN_POLL_INTERVAL_MS = 500
 
+// Windows Firewall kill switch rule prefix — all our rules share this prefix
+// so they can be deleted as a group.
+const KS_RULE_PREFIX = 'Sentinel-KS'
+const KS_RULE_NAMES  = [
+  `${KS_RULE_PREFIX}-Allow-Server`,
+  `${KS_RULE_PREFIX}-Allow-TUN`,
+  `${KS_RULE_PREFIX}-Allow-Loopback`,
+  `${KS_RULE_PREFIX}-Allow-DHCP`,
+]
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -105,7 +115,18 @@ interface StartTransparentPayload {
   socksPort: number
   /** Already-resolved IPv4 address of the V2Ray server. No hostnames. */
   serverIp: string
+  /** Whether to enable the kill switch after the tunnel is up. Default false. */
+  killSwitch?: boolean
 }
+
+interface SetKillSwitchPayload {
+  enabled: boolean
+}
+
+// ---------------------------------------------------------------------------
+// Active state
+// ---------------------------------------------------------------------------
+let killSwitchActive = false
 
 // ---------------------------------------------------------------------------
 // Active process state
@@ -342,7 +363,7 @@ async function handleStartTransparent(
   socket: net.Socket,
   payload: StartTransparentPayload,
 ): Promise<void> {
-  const { tun2socksPath, socksPort, serverIp } = payload
+  const { tun2socksPath, socksPort, serverIp, killSwitch = false } = payload
 
   if (activeTun2Socks !== null) {
     sendResponse(socket, {
@@ -461,6 +482,7 @@ async function handleStartTransparent(
     log('INFO', 'Default routes added via TUN. Transparent mode is active.')
 
     activeServerIp = serverIp
+    if (killSwitch) enableKillSwitch(serverIp)
     sendResponse(socket, { status: 'ok', pid: child.pid })
 
   } catch (err: unknown) {
@@ -525,6 +547,83 @@ function handleStopTransparent(socket: net.Socket): void {
   sendResponse(socket, { status: 'ok' })
 }
 
+/**
+ * Enables the Windows Firewall kill switch by setting the default outbound
+ * policy to BLOCK and adding named allow rules for:
+ *   - The V2Ray server IP (so the proxy connection survives)
+ *   - The TUN adapter (so tunnelled traffic can leave)
+ *   - Loopback 127.0.0.0/8 (localhost IPC must not break)
+ *   - DHCP UDP 67/68 (physical NIC must renew its lease)
+ *
+ * The default policy is evaluated after all explicit rules, so allow rules
+ * act as true exceptions — this is different from adding an explicit block
+ * rule which would override them.
+ *
+ * @param serverIp  IPv4 address of the V2Ray server to exempt.
+ * @throws          Error if any netsh command fails.
+ */
+function enableKillSwitch(serverIp: string): void {
+  if (killSwitchActive) {
+    log('WARN', 'Kill switch already active — skipping enableKillSwitch.')
+    return
+  }
+  log('INFO', `Enabling Windows kill switch. Server IP exempt: ${serverIp}`)
+
+  runCmd('netsh advfirewall set allprofiles firewallpolicy allowinbound,blockoutbound')
+  runCmd(`netsh advfirewall firewall add rule name="${KS_RULE_PREFIX}-Allow-Server" dir=out action=allow protocol=any remoteip=${serverIp}`)
+  runCmd(`netsh advfirewall firewall add rule name="${KS_RULE_PREFIX}-Allow-TUN" dir=out action=allow protocol=any interface="${TUN_NAME}"`)
+  runCmd(`netsh advfirewall firewall add rule name="${KS_RULE_PREFIX}-Allow-Loopback" dir=out action=allow protocol=any remoteip=127.0.0.0/8`)
+  runCmd(`netsh advfirewall firewall add rule name="${KS_RULE_PREFIX}-Allow-DHCP" dir=out action=allow protocol=UDP localport=68 remoteport=67`)
+
+  killSwitchActive = true
+  log('INFO', 'Windows kill switch enabled.')
+}
+
+/**
+ * Disables the Windows Firewall kill switch by removing all Sentinel-KS-*
+ * rules and restoring the default outbound policy to ALLOW. Safe to call even
+ * if the kill switch was never enabled — it attempts orphan rule cleanup.
+ */
+function disableKillSwitch(): void {
+  log('INFO', 'Disabling Windows kill switch.')
+  for (const name of KS_RULE_NAMES) {
+    try { runCmd(`netsh advfirewall firewall delete rule name="${name}"`) }
+    catch (err) { log('WARN', `Could not delete firewall rule "${name}".`, err) }
+  }
+  try { runCmd('netsh advfirewall set allprofiles firewallpolicy allowinbound,allowoutbound') }
+  catch (err) { log('ERROR', 'Failed to restore default outbound policy.', err) }
+  killSwitchActive = false
+  log('INFO', 'Windows kill switch disabled.')
+}
+
+/**
+ * Handles 'set-kill-switch'. Enables or disables the kill switch at runtime
+ * without requiring a full reconnect. Enabling requires transparent mode to
+ * be active (we need activeServerIp for the allow rules).
+ *
+ * @param socket   Connected client socket.
+ * @param payload  Validated SetKillSwitchPayload.
+ */
+function handleSetKillSwitch(socket: net.Socket, payload: SetKillSwitchPayload): void {
+  if (payload.enabled) {
+    if (activeServerIp === null) {
+      sendResponse(socket, { status: 'error', error: 'Cannot enable kill switch: transparent mode is not active.' })
+      return
+    }
+    try {
+      enableKillSwitch(activeServerIp)
+      sendResponse(socket, { status: 'ok' })
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err)
+      log('ERROR', 'enableKillSwitch failed.', { message })
+      sendResponse(socket, { status: 'error', error: message })
+    }
+  } else {
+    disableKillSwitch()
+    sendResponse(socket, { status: 'ok' })
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Payload validation
 // ---------------------------------------------------------------------------
@@ -558,6 +657,19 @@ function parseStartTransparentPayload(command: HelperCommand): StartTransparentP
   }
 
   return { tun2socksPath: tun2socksPath.trim(), socksPort, serverIp }
+}
+
+/**
+ * Validates a SetKillSwitchPayload from a raw HelperCommand.
+ *
+ * @param command  Raw HelperCommand from Electron.
+ * @returns        Validated SetKillSwitchPayload.
+ * @throws         Descriptive Error on validation failure.
+ */
+function parseSetKillSwitchPayload(command: HelperCommand): SetKillSwitchPayload {
+  const { enabled } = command as Record<string, unknown>
+  if (typeof enabled !== 'boolean') throw new Error('"enabled" must be a boolean.')
+  return { enabled }
 }
 
 // ---------------------------------------------------------------------------
@@ -602,6 +714,14 @@ function processCommand(socket: net.Socket, command: HelperCommand): void {
     case 'stop-transparent':
       handleStopTransparent(socket)
       break
+
+    case 'set-kill-switch': {
+      let payload: SetKillSwitchPayload
+      try { payload = parseSetKillSwitchPayload(command) }
+      catch (err: unknown) { sendResponse(socket, { status: 'error', error: (err as Error).message }); return }
+      handleSetKillSwitch(socket, payload)
+      break
+    }
 
     default:
       log('WARN', `Unknown command received: ${command.command}`)

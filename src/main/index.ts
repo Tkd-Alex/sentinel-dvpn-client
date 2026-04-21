@@ -168,6 +168,10 @@ app.whenReady().then(async () => {
     serverIp: '1.2.3.4'
   })
   console.log(helperResp)
+
+  // DEBUG
+  await sendToHelper({ command: 'set-kill-switch', enabled: true })
+  await sendToHelper({ command: 'set-kill-switch', enabled: false })
 })
 
 app.on('window-all-closed', async () => {
