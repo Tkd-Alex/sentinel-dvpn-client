@@ -575,7 +575,7 @@ async function setupTransparentV2Ray(v2ray: V2Ray): Promise<{ success: boolean; 
       socksPort: socksPort,
       serverIp: activeV2RayServerIp,
       killSwitch: settings.killSwitch
-    })
+    }, 60_000)
 
     if (helperResponse.status === "ok") activeTun2Socks = helperResponse.pid as number
     return { success: helperResponse.status === "ok" }
