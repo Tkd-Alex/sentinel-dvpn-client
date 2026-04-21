@@ -175,6 +175,12 @@ async function installLinuxHelper(): Promise<void> {
   const installDir = '/usr/local/lib/sentinel'
   const helperDest = `${installDir}/sentinel-helper`
 
+  // Copy to /tmp first — /tmp is readable by root even from FUSE mount.
+  // The file in /tmp is removed by the privileged script after copying.
+  const tmpPath = `/tmp/sentinel-helper-setup-${Date.now()}`
+  fs.copyFileSync(helperSrc, tmpPath)
+  fs.chmodSync(tmpPath, 0o755)
+
   const unitContent = [
     '[Unit]',
     'Description=Sentinel Privileged Helper',
@@ -191,8 +197,9 @@ async function installLinuxHelper(): Promise<void> {
 
   const result = await execPrivileged([
     `mkdir -p ${installDir}`,
-    `cp ${helperSrc} ${helperDest}`,
+    `cp ${tmpPath} ${helperDest}`,
     `chmod 755 ${helperDest}`,
+    `rm -f ${tmpPath}`,
     `printf '${unitContent}' > /etc/systemd/system/sentinel-helper.service`,
     `systemctl daemon-reload`,
     `systemctl enable sentinel-helper`,
