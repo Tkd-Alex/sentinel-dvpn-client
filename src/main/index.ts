@@ -684,6 +684,7 @@ async function doHandshake(nodeAddress: string, sessionId: Long) {
 
     if (nInfo.service_type === NodeVPNType.V2RAY) {
       if (activeV2Ray) { try { activeV2Ray.disconnect() } catch (_) {}; activeV2Ray = null }
+      checkBinaries()
       const v2ray = new V2Ray(); const result = await handshake(sessionId, { uuid: v2ray.getKey() }, walletState.privkey!, remoteAddr).catch(e => { throw new Error(`[handshake] ${extractError(e)}`) })
       const hd = JSON.parse(Buffer.from(result.data, 'base64').toString('utf8')); await v2ray.parseConfig(hd, result.addrs)
       const shareLinks = v2ray.buildShareLinks(`sentinel-${nodeAddress.slice(-8)}`)
@@ -932,10 +933,25 @@ function checkBinaries() {
   const custom = (store.get(STORE_KEY_BINARIES) as Record<string, string>) ?? {}
   const getHash = (p: string) => { try { const data = fs.readFileSync(p); return crypto.createHash('sha256').update(data).digest('hex') } catch { return null } }
   const find = (n: string) => { 
-    if (custom[n] && fs.existsSync(custom[n])) return custom[n]
+    // Check custom path with and without .exe
+    const nameWithoutExe = n.replace(/\.exe$/i, '')
+    const targetPath = custom[n] || custom[nameWithoutExe]
+    
+    if (targetPath && fs.existsSync(targetPath)) {
+      console.log(`[BinaryCheck] Using custom path for ${n}: ${targetPath}`)
+      // Robust fix: Add the directory of the custom binary to the PATH
+      const binDir = path.dirname(targetPath)
+      if (process.platform === 'win32' && !process.env.PATH?.includes(binDir)) {
+        process.env.PATH = `${binDir};${process.env.PATH}`
+        console.log(`[BinaryCheck] Added to PATH: ${binDir}`)
+      }
+      return targetPath
+    }
     try { 
       const cmd = process.platform === 'win32' ? `where ${n}` : `which ${n}`; 
-      return execSync(cmd, { stdio: 'pipe' }).toString().trim().split('\n')[0] 
+      const found = execSync(cmd, { stdio: 'pipe' }).toString().trim().split('\n')[0]
+      console.log(`[BinaryCheck] Found ${n} in PATH: ${found}`)
+      return found
     } catch { 
       if (process.platform === 'win32') {
         if (n === 'wireguard.exe') {
@@ -944,8 +960,12 @@ function checkBinaries() {
         }
         // Fallback for v2ray and tun2socks if they are in the same folder as the app
         const localPath = path.join(path.dirname(app.getPath('exe')), n)
-        if (fs.existsSync(localPath)) return localPath
+        if (fs.existsSync(localPath)) {
+          console.log(`[BinaryCheck] Found ${n} in local app folder: ${localPath}`)
+          return localPath
+        }
       }
+      console.warn(`[BinaryCheck] ${n} NOT FOUND`)
       return null 
     } 
   }
