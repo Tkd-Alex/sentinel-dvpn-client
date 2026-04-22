@@ -156,7 +156,10 @@ app.whenReady().then(async () => {
   registerIpcHandlers()
 
   const alive = await pingHelper()
-  if (!alive && process.platform === 'linux') await installLinuxHelper()
+  if (!alive){
+    if(process.platform === 'linux') await ensureLinuxHelper()
+    else if(process.platform === 'win32') await ensureWindowsHelper();
+  }
 
   createWindow()
 })
@@ -165,6 +168,74 @@ app.on('window-all-closed', async () => {
   await killActiveConnections(true)
   if (process.platform !== 'darwin') app.quit()
 })
+
+async function ensureWindowsHelper(): Promise<void> {
+  const alive = await pingHelper(3_000)
+  if (alive) return
+
+  const helperExe = app.isPackaged
+    ? path.join(process.resourcesPath, 'sentinel-helper.exe')
+    : path.join(__dirname, '..', '..', 'dist-helper', 'sentinel-helper.exe')
+
+  // Check if the task already exists
+  const { execSync } = require('child_process')
+  let taskExists = false
+  try { execSync('schtasks /query /tn "SentinelHelper"', { stdio: 'pipe' }); taskExists = true }
+  catch { taskExists = false }
+
+  if (!taskExists) {
+    // Log the task via UAC — once, then never again
+    const result = await execPrivileged([
+      `schtasks /create /tn "SentinelHelper" /tr "'${helperExe}' --service" /sc onstart /ru SYSTEM /rl HIGHEST /f`,
+    ])
+    if (result.code !== 0) throw new Error(`Failed to register SentinelHelper task: ${result.stderr}`)
+  }
+
+  // Start — does not require UAC because the task is already registered as SYSTEM
+  try { execSync('schtasks /run /tn "SentinelHelper"', { stdio: 'pipe' }) }
+  catch (err) { console.log('schtasks /run failed.', err) }
+
+  for (let i = 0; i < 10; i++) {
+    await new Promise(r => setTimeout(r, 500))
+    if (await pingHelper(1_000)) return
+  }
+  throw new Error('SentinelHelper did not respond after task start.')
+}
+
+async function ensureLinuxHelper(): Promise<void> {
+  const alive = await pingHelper(3_000)
+  if (alive) return
+
+  // Check if the service exists but is stopped
+  const { execSync } = require('child_process')
+  let serviceExists = false
+  try {
+    execSync('systemctl status sentinel-helper', { stdio: 'pipe' })
+    serviceExists = true
+  } catch (err: any) {
+    // exit code 3 = service exists but stopped, exit code 4 = not found
+    serviceExists = (err.status === 3)
+  }
+
+  if (serviceExists) {
+    // Service exists but is stopped — attempting to restart with privilege
+    const res = await execPrivileged(['systemctl start sentinel-helper'])
+    if (res.code !== 0) {
+      // Restart failed — reinstall from scratch
+      await installLinuxHelper()
+    }
+  } else {
+    // First installation
+    await installLinuxHelper()
+  }
+
+  // Wait for the service to be ready (max 5s)
+  for (let i = 0; i < 10; i++) {
+    await new Promise(r => setTimeout(r, 500))
+    if (await pingHelper(1_000)) return
+  }
+  throw new Error('Helper service did not respond after start.')
+}
 
 async function installLinuxHelper(): Promise<void> {
   const resourcesPath = app.isPackaged
