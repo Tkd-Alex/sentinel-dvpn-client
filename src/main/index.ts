@@ -869,64 +869,108 @@ function patchConfigFileForDns(configFile: string): void {
   } catch (_) {}
 }
 
+/**
+ * Brings up a WireGuard tunnel by delegating to the sentinel-helper service.
+ * On Windows the helper runs wireguard.exe /installtunnelservice (SYSTEM privilege).
+ * On Linux/macOS the helper runs wg-quick up (root privilege).
+ *
+ * If the first attempt fails due to a DNS error on Linux/macOS, the user is
+ * asked whether to retry without DNS injection. If approved, the config file
+ * is patched and the command is retried once.
+ *
+ * @param configFile  Absolute path to the WireGuard .conf file.
+ * @returns           { success: true } on success, { success: false, error } on failure.
+ */
 async function wgQuickUp(configFile: string): Promise<{ success: boolean; error?: string }> {
-  const plat = process.platform
-  const isDnsError = (stderr: string) => 
-    stderr.includes('resolvconf') || stderr.includes('resolve1') || stderr.includes('Failed to set DNS') || stderr.includes('DNS')
+  const info   = checkBinaries()
+  const wgPath = info.wgPath ?? undefined
 
-  const run = async () => {
-    if (plat === 'win32') {
-      const info = checkBinaries()
-      const exe = info.wgPath || 'wireguard.exe'
-      // Use & "path" to handle spaces and quotes correctly in PowerShell
-      const res = await execPrivileged([`& "${exe}" /installtunnelservice "${configFile}"`])
-      return { code: res.code, stderr: res.stderr }
-    }
-    return await execPrivileged([`wg-quick up "${configFile}"`])
-  }
+  // Helper timeout for wg-up: 30 s is enough for wireguard.exe installtunnelservice
+  // and wg-quick up. These are one-shot commands, not daemons.
+  const TIMEOUT = 30_000
 
-  let r1 = await run()
-  if (r1.code === 0) {
-    // const settings = getSettings()
-    // if (settings.killSwitch) applyKillSwitch(true).catch(() => {})
+  const attemptUp = () => sendToHelper({ command: 'wg-up', configFile, wgPath }, TIMEOUT)
+
+  // First attempt.
+  let res = await attemptUp()
+
+  if (res.status === 'ok') {
     startTrafficPolling()
     return { success: true }
   }
 
-  if (isDnsError(r1.stderr)) {
+  // DNS retry path — Linux / macOS only.
+  if (res.isDnsError === true) {
+    // Tell the renderer to show the DNS retry dialog.
     mainWindow?.webContents.send('vpn:dns-retry-ask')
-    await new Promise((res) => { ipcMain.once('vpn:dns-retry-approved', () => res(true)) })
+
+    // Wait for the user to approve or cancel.
+    const approved = await new Promise<boolean>((resolve) => {
+      // Resolve true when the user approves.
+      ipcMain.once('vpn:dns-retry-approved', () => resolve(true))
+      // Resolve false if the window is closed or a timeout elapses (60 s).
+      const guard = setTimeout(() => resolve(false), 60_000)
+      ipcMain.once('vpn:dns-retry-approved', () => clearTimeout(guard))
+    })
+
+    if (!approved) {
+      return { success: false, error: res.error ?? 'DNS error — user cancelled retry.' }
+    }
+
+    // Patch the config file in place — removes DNS = lines from [Interface].
+    // patchConfigFileForDns() is a plain fs.writeFileSync call, no privileges needed.
     patchConfigFileForDns(configFile)
-    let r2 = await run()
-    if (r2.code === 0) {
+
+    // Second attempt with the patched config (same path, new content).
+    res = await attemptUp()
+
+    if (res.status === 'ok') {
       startTrafficPolling()
       mainWindow?.webContents.send('vpn:warning', { message: 'Connected without DNS injection.' })
       return { success: true }
     }
-    return { success: false, error: r2.stderr }
+
+    return { success: false, error: res.error ?? 'wg-quick up failed after DNS patch.' }
   }
-  return { success: false, error: r1.stderr }
+
+  // Any other error.
+  return { success: false, error: res.error ?? 'wg-up failed.' }
 }
 
+/**
+ * Tears down a WireGuard tunnel by delegating to the sentinel-helper service.
+ * On Windows the helper runs wireguard.exe /uninstalltunnelservice.
+ * On Linux/macOS the helper runs wg-quick down.
+ *
+ * After the helper confirms teardown, the temporary config directory is removed
+ * by Electron (plain fs.rmSync — no privileges needed for the temp directory).
+ *
+ * This function never throws — failures are logged as warnings so that the
+ * rest of the killActiveConnections() teardown sequence is not interrupted.
+ *
+ * @param configFile  Absolute path to the WireGuard .conf file.
+ */
 async function wgQuickDown(configFile: string): Promise<void> {
-  const plat = process.platform
-  const ifName = path.basename(configFile, '.conf')
-  // Note: traffic polling stop is handled by the global state management in App.tsx usually,
-  // but we should ensure we don't call non-existent functions.
+  const info   = checkBinaries()
+  const wgPath = info.wgPath ?? undefined
 
   try {
-    if (plat === 'win32') {
-      const info = checkBinaries()
-      const exe = info.wgPath || 'wireguard.exe'
-      // Use execPrivileged for uninstall to trigger UAC
-      await execPrivileged([`& "${exe}" /uninstalltunnelservice "${ifName}"`]).catch(() => {})
-    } else {
-      try { execSync(`ip link show ${ifName}`, { stdio: 'ignore' }) } catch { return }
-      await execPrivileged([`wg-quick down "${configFile}"`]).catch(() => {})
+    const res = await sendToHelper({ command: 'wg-down', configFile, wgPath }, 15_000)
+    if (res.status !== 'ok') {
+      console.warn('[wgQuickDown] Helper returned error:', res.error)
     }
-  } catch (e) { console.warn('wgQuickDown failed', e) }
+  } catch (err) {
+    console.warn('[wgQuickDown] sendToHelper failed:', err)
+  }
 
-  try { fs.rmSync(path.dirname(configFile), { recursive: true, force: true }) } catch (_) {}
+  // Remove the temporary config directory regardless of the helper result.
+  // The config file contains private keys — clean it up even if the tunnel
+  // teardown itself failed.
+  try {
+    fs.rmSync(path.dirname(configFile), { recursive: true, force: true })
+  } catch (err) {
+    console.warn('[wgQuickDown] Failed to remove config directory:', err)
+  }
 }
 
 function scheduleReconnect() {
