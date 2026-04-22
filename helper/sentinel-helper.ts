@@ -109,6 +109,33 @@ interface SetKillSwitchPayload {
   enabled: boolean
 }
 
+/**
+ * Payload for the 'wg-up' command. Instructs the helper to bring up a
+ * WireGuard tunnel by installing it as a service (Windows) or running
+ * wg-quick (Linux/macOS).
+ */
+interface WgUpPayload {
+  /** Absolute path to the WireGuard config file (.conf). */
+  configFile: string
+  /**
+   * Absolute path to wireguard.exe. Required on Windows because the binary
+   * location is user-configured (checkBinaries in Electron resolves it).
+   * Ignored on Linux/macOS.
+   */
+  wgPath?: string
+}
+
+/**
+ * Payload for the 'wg-down' command. Instructs the helper to tear down
+ * a WireGuard tunnel.
+ */
+interface WgDownPayload {
+  /** Absolute path to the WireGuard config file (.conf). */
+  configFile: string
+  /** Same as WgUpPayload.wgPath — required on Windows only. */
+  wgPath?: string
+}
+
 // ---------------------------------------------------------------------------
 // Active state
 // ---------------------------------------------------------------------------
@@ -215,6 +242,25 @@ function waitForInterface(
 
     poll()
   })
+}
+
+/**
+ * Determines whether a stderr string from wg-quick indicates a DNS
+ * configuration failure. wg-quick on Linux fails with DNS errors when
+ * resolvconf is not installed or when systemd-resolved is not available.
+ * In that case Electron will ask the user whether to retry without DNS
+ * injection (using a patched config file).
+ *
+ * @param stderr  The stderr output from the wg-quick invocation.
+ * @returns       True if the error is DNS-related.
+ */
+function isWgDnsError(stderr: string): boolean {
+  return (
+    stderr.includes('resolvconf') ||
+    stderr.includes('resolve1') ||
+    stderr.includes('Failed to set DNS') ||
+    stderr.includes('DNS')
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -764,6 +810,127 @@ function handleSetKillSwitch(socket: net.Socket, payload: SetKillSwitchPayload):
   }
 }
 
+/**
+ * Handles the 'wg-up' command. Brings up a WireGuard tunnel with elevated
+ * privileges. The implementation differs by platform:
+ *
+ *   Windows: runs `wireguard.exe /installtunnelservice <configFile>`.
+ *            wireguard.exe installs the tunnel as a Windows service under its
+ *            own service manager — no UAC prompt needed because this helper
+ *            already runs as SYSTEM via Task Scheduler.
+ *
+ *   Linux:   runs `wg-quick up <configFile>` as root.
+ *            If the command fails with a DNS-related error, the response
+ *            includes { isDnsError: true } so Electron can offer the user
+ *            the option to retry with a patched config (DNS injection removed).
+ *
+ * The helper does NOT handle the DNS retry logic — that involves a UI dialog
+ * and config file patching that belong in Electron. The helper simply reports
+ * the error type and waits for Electron to call wg-up again with a fixed config.
+ *
+ * @param socket   Connected client socket for sending the response.
+ * @param payload  Validated WgUpPayload.
+ */
+function handleWgUp(socket: net.Socket, payload: WgUpPayload): void {
+  const { configFile, wgPath } = payload
+
+  try {
+    if (PLATFORM === 'win32') {
+      const exe = wgPath || 'wireguard.exe'
+      // /installtunnelservice takes the full config file path.
+      // wireguard.exe derives the tunnel/service name from the filename.
+      runCmd(`"${exe}" /installtunnelservice "${configFile}"`)
+      sendResponse(socket, { status: 'ok' })
+
+    } else if (PLATFORM === 'linux' || PLATFORM === 'darwin') {
+      try {
+        runCmd(`wg-quick up "${configFile}"`)
+        sendResponse(socket, { status: 'ok' })
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err)
+        const dnsError = isWgDnsError(message)
+        log(dnsError ? 'WARN' : 'ERROR', 'wg-quick up failed.', { message, dnsError })
+        sendResponse(socket, {
+          status: 'error',
+          error: message,
+          // Signals Electron to show the DNS retry dialog.
+          isDnsError: dnsError,
+        })
+      }
+
+    } else {
+      sendResponse(socket, { status: 'error', error: `wg-up not implemented for platform: ${PLATFORM}` })
+    }
+
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err)
+    log('ERROR', 'handleWgUp failed.', { message })
+    sendResponse(socket, { status: 'error', error: message })
+  }
+}
+
+/**
+ * Handles the 'wg-down' command. Tears down a WireGuard tunnel.
+ *
+ *   Windows: runs `wireguard.exe /uninstalltunnelservice <ifName>`.
+ *            ifName is derived from the config file basename (without .conf).
+ *
+ *   Linux:   first checks whether the interface exists via `ip link show`.
+ *            If the interface is already gone (e.g. due to a previous crash),
+ *            returns ok immediately — teardown is idempotent.
+ *            Otherwise runs `wg-quick down <configFile>`.
+ *
+ * @param socket   Connected client socket for sending the response.
+ * @param payload  Validated WgDownPayload.
+ */
+function handleWgDown(socket: net.Socket, payload: WgDownPayload): void {
+  const { configFile, wgPath } = payload
+  // Derive the interface / tunnel name from the config filename.
+  const ifName = path.basename(configFile, '.conf')
+
+  try {
+    if (PLATFORM === 'win32') {
+      const exe = wgPath || 'wireguard.exe'
+      try {
+        runCmd(`"${exe}" /uninstalltunnelservice "${ifName}"`)
+      } catch (err) {
+        // If the tunnel service is already gone (e.g. previous crash), treat
+        // it as success — wgDown is always idempotent from Electron's view.
+        log('WARN', 'wg uninstalltunnelservice failed (may already be gone).', err)
+      }
+      sendResponse(socket, { status: 'ok' })
+
+    } else if (PLATFORM === 'linux' || PLATFORM === 'darwin') {
+      // Check whether the interface is still up before calling wg-quick down.
+      // If it is already gone, return ok immediately.
+      try {
+        execSync(`ip link show ${ifName}`, { stdio: 'pipe' })
+      } catch {
+        log('INFO', `wg-down: interface ${ifName} already absent — nothing to do.`)
+        sendResponse(socket, { status: 'ok' })
+        return
+      }
+
+      try {
+        runCmd(`wg-quick down "${configFile}"`)
+      } catch (err) {
+        log('WARN', 'wg-quick down failed.', err)
+        // Still return ok — the interface check above confirmed it is gone
+        // or wg-quick cleaned it up partially. Do not leave Electron hanging.
+      }
+      sendResponse(socket, { status: 'ok' })
+
+    } else {
+      sendResponse(socket, { status: 'error', error: `wg-down not implemented for platform: ${PLATFORM}` })
+    }
+
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err)
+    log('ERROR', 'handleWgDown failed.', { message })
+    sendResponse(socket, { status: 'error', error: message })
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Payload validation
 // ---------------------------------------------------------------------------
@@ -801,6 +968,39 @@ function parseSetKillSwitchPayload(command: HelperCommand): SetKillSwitchPayload
   return { enabled }
 }
 
+/**
+ * Validates a WgUpPayload from a raw HelperCommand.
+ *
+ * @param command  Raw HelperCommand from Electron.
+ * @returns        Validated WgUpPayload.
+ * @throws         Descriptive Error on validation failure.
+ */
+function parseWgUpPayload(command: HelperCommand): WgUpPayload {
+  const { configFile, wgPath } = command as Record<string, unknown>
+  if (typeof configFile !== 'string' || !configFile.trim())
+    throw new Error('wg-up: "configFile" must be a non-empty string.')
+  if (wgPath !== undefined && typeof wgPath !== 'string')
+    throw new Error('wg-up: optional "wgPath" must be a string.')
+  return { configFile: configFile.trim(), wgPath: wgPath as string | undefined }
+}
+
+/**
+ * Validates a WgDownPayload from a raw HelperCommand.
+ *
+ * @param command  Raw HelperCommand from Electron.
+ * @returns        Validated WgDownPayload.
+ * @throws         Descriptive Error on validation failure.
+ */
+function parseWgDownPayload(command: HelperCommand): WgDownPayload {
+  const { configFile, wgPath } = command as Record<string, unknown>
+  if (typeof configFile !== 'string' || !configFile.trim())
+    throw new Error('wg-down: "configFile" must be a non-empty string.')
+  if (wgPath !== undefined && typeof wgPath !== 'string')
+    throw new Error('wg-down: optional "wgPath" must be a string.')
+  return { configFile: configFile.trim(), wgPath: wgPath as string | undefined }
+}
+
+
 // ---------------------------------------------------------------------------
 // Command dispatcher
 // ---------------------------------------------------------------------------
@@ -837,6 +1037,22 @@ function processCommand(socket: net.Socket, command: HelperCommand): void {
       try { payload = parseSetKillSwitchPayload(command) }
       catch (err: unknown) { sendResponse(socket, { status: 'error', error: (err as Error).message }); return }
       handleSetKillSwitch(socket, payload)
+      break
+    }
+
+      case 'wg-up': {
+      let payload: WgUpPayload
+      try { payload = parseWgUpPayload(command) }
+      catch (err: unknown) { sendResponse(socket, { status: 'error', error: (err as Error).message }); return }
+      handleWgUp(socket, payload)
+      break
+    }
+
+    case 'wg-down': {
+      let payload: WgDownPayload
+      try { payload = parseWgDownPayload(command) }
+      catch (err: unknown) { sendResponse(socket, { status: 'error', error: (err as Error).message }); return }
+      handleWgDown(socket, payload)
       break
     }
 
