@@ -88,6 +88,11 @@ const HELPER_DEST         = `${HELPER_INSTALL_DIR}/sentinel-helper`
 const PLIST_DEST          = '/Library/LaunchDaemons/com.sentinel.helper.plist'
 const LAUNCHD_LABEL       = 'com.sentinel.helper'
 
+// ── *net interfaces ───────────────────────────────────────────────────────────────
+const TUN_IFACE_LINUX = 'sentun0'
+const TUN_IFACE_WIN   = 'sentinel-tun'
+const TUN_IFACE_MAC   = 'utun10'
+
 // ── Defaults ──────────────────────────────────────────────────────────────────
 interface AppSettings {
   killSwitch:     boolean
@@ -829,46 +834,100 @@ async function doHandshake(nodeAddress: string, sessionId: Long) {
   }
 }
 
+function getTunIfaceName(): string {
+  if (process.platform === 'linux')  return TUN_IFACE_LINUX
+  if (process.platform === 'win32')  return TUN_IFACE_WIN
+  return TUN_IFACE_MAC
+}
+
 async function getTrafficStats(): Promise<{ rx: number; tx: number; source: string }> {
-  // 1. WireGuard Stats
+
+  // 1. WireGuard stats
   if (activeWgConfigFile && activeWgInstance) {
     const ifName = path.basename(activeWgConfigFile, '.conf')
+
+    // Linux: /sys/class/net It is readable without root — no helpers needed
     if (process.platform === 'linux') {
       try {
         const rx = parseInt(fs.readFileSync(`/sys/class/net/${ifName}/statistics/rx_bytes`, 'utf8').trim()) || 0
         const tx = parseInt(fs.readFileSync(`/sys/class/net/${ifName}/statistics/tx_bytes`, 'utf8').trim()) || 0
-        return { rx, tx, source: 'wireguard' }
-      } catch { /* Fallback */ }
+        if (rx > 0 || tx > 0) return { rx, tx, source: 'wireguard' }
+      } catch { /* fallback */ }
     }
-    try {
-      const lines = execSync('wg show all transfer', { stdio: 'pipe' }).toString().trim().split('\n')
-      let rx = 0, tx = 0; for (const line of lines) { const parts = line.trim().split(/\s+/); if (parts.length >= 3) { rx += parseInt(parts[1]) || 0; tx += parseInt(parts[2]) || 0 } }
-      return { rx, tx, source: 'wireguard' }
-    } catch { }
+
+    // Linux/macOS: wg show all transfer, root requied > helper
+    if (process.platform === 'linux' || process.platform === 'darwin') {
+      try {
+        const res = await sendToHelper({ command: 'get-wg-stats' }, 3_000)
+        if (res.status === 'ok' && (res.rx as number > 0 || res.tx as number > 0)) {
+          return { rx: res.rx as number, tx: res.tx as number, source: 'wireguard' }
+        }
+      } catch { /* fallback */ }
+    }
+
+    // Windows: wg show works without elevation if the WireGuard service is active
+    if (process.platform === 'win32') {
+      try {
+        const lines = execSync('wg show all transfer', { stdio: 'pipe' }).toString().trim().split('\n')
+        let rx = 0, tx = 0
+        for (const line of lines) {
+          const parts = line.trim().split(/\s+/)
+          if (parts.length >= 3) { rx += parseInt(parts[1]) || 0; tx += parseInt(parts[2]) || 0 }
+        }
+        if (rx > 0 || tx > 0) return { rx, tx, source: 'wireguard' }
+      } catch { /* fallback */ }
+    }
   }
 
-  // 2. tun2socks Stats (Linux TUN fallback)
-  if (activeTunInterface && process.platform === 'linux') {
-    try {
-      const rx = parseInt(fs.readFileSync(`/sys/class/net/${activeTunInterface}/statistics/rx_bytes`, 'utf8').trim()) || 0
-      const tx = parseInt(fs.readFileSync(`/sys/class/net/${activeTunInterface}/statistics/tx_bytes`, 'utf8').trim()) || 0
-      if (rx > 0 || tx > 0) return { rx, tx, source: 'tun2socks' }
-    } catch { }
+  // 2. tun2socks stats via /sys/class/net — Linux and macOS, readable without root
+  // Use hardcoded name instead of activeTunInterface (now handled by the helper)
+  if (activeTun2Socks !== null) {
+    const tunIface = getTunIfaceName()
+
+    if (process.platform === 'linux') {
+      try {
+        const rx = parseInt(fs.readFileSync(`/sys/class/net/${tunIface}/statistics/rx_bytes`, 'utf8').trim()) || 0
+        const tx = parseInt(fs.readFileSync(`/sys/class/net/${tunIface}/statistics/tx_bytes`, 'utf8').trim()) || 0
+        if (rx > 0 || tx > 0) return { rx, tx, source: 'tun2socks' }
+      } catch { /* fallback */ }
+    }
+
+    // macOS: netstat for utun statistics (ifconfig -v include byte counts)
+    if (process.platform === 'darwin') {
+      try {
+        const out = execSync(`netstat -I ${tunIface} -b`, { encoding: 'utf8', stdio: 'pipe' })
+        const lines = out.trim().split('\n').filter(l => l.includes(tunIface))
+        if (lines.length > 0) {
+          const parts = lines[0].trim().split(/\s+/)
+          // netstat -b columns: Name Mtu Network Address Ipkts Ierrs Ibytes Opkts Oerrs Obytes Drop
+          const rx = parseInt(parts[6]) || 0
+          const tx = parseInt(parts[9]) || 0
+          if (rx > 0 || tx > 0) return { rx, tx, source: 'tun2socks' }
+        }
+      } catch { /* fallback */ }
+    }
   }
 
-  // 3. V2Ray API Stats
+  // 3. V2Ray API stats — HTTP localhost, no privileges needed
   if (activeV2Ray?.config?.inbounds) {
     try {
       const apiInbound = activeV2Ray.config.inbounds.find((ib: any) => ib.tag === 'api')
       if (apiInbound) {
-        const res = await fetch(`http://127.0.0.1:${apiInbound.port}/stats/query`, { signal: AbortSignal.timeout(1000) }).catch(() => null)
+        const res = await fetch(
+          `http://127.0.0.1:${apiInbound.port}/stats/query`,
+          { signal: AbortSignal.timeout(1000) }
+        ).catch(() => null)
         if (res?.ok) {
-          const data = await res.json() as any; const vals = (data.stat ?? []).map((s: any) => parseInt(s.value) || 0)
-          return { rx: vals.filter((_: any, i: number) => i % 2 === 0).reduce((a: any, b: any) => a + b, 0), tx: vals.filter((_: any, i: number) => i % 2 === 1).reduce((a: any, b: any) => a + b, 0), source: 'v2ray' }
+          const data = await res.json() as any
+          const vals = (data.stat ?? []).map((s: any) => parseInt(s.value) || 0)
+          const rx = vals.filter((_: any, i: number) => i % 2 === 0).reduce((a: any, b: any) => a + b, 0)
+          const tx = vals.filter((_: any, i: number) => i % 2 !== 0).reduce((a: any, b: any) => a + b, 0)
+          return { rx, tx, source: 'v2ray' }
         }
       }
-    } catch { }
+    } catch { /* fallback */ }
   }
+
   return { rx: 0, tx: 0, source: 'none' }
 }
 
