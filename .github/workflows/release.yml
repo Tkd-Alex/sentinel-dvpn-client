@@ -28,11 +28,8 @@ jobs:
             helper_output: dist-helper/sentinel-helper.exe
           - os: macos-latest
             platform: mac
-            # macOS helper not yet implemented — matrix entry kept so the Mac
-            # Electron app still builds and releases. Remove pkg_target when
-            # the macOS handler is added to sentinel-helper.ts.
-            pkg_target: ""
-            helper_output: ""
+            pkg_target: node18-macos-x64
+            helper_output: dist-helper/sentinel-helper-mac
 
     runs-on: ${{ matrix.os }}
 
@@ -75,6 +72,10 @@ jobs:
       - name: Build privileged helper (Linux)
         if: matrix.platform == 'linux'
         run: npm run build:helper:linux
+
+      - name: Build privileged helper (macOS)
+        if: matrix.platform == 'mac'
+        run: npm run build:helper:mac
 
       # -----------------------------------------------------------------------
       # Build the main Electron JS bundles (Vite / webpack / tsc, whatever
