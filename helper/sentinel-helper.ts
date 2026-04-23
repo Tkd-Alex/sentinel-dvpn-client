@@ -160,6 +160,11 @@ interface WgDownPayload {
   wgPath?: string
 }
 
+interface GetWgStatsResponse extends HelperResponse {
+  rx?: number
+  tx?: number
+}
+
 // ---------------------------------------------------------------------------
 // Active state
 // ---------------------------------------------------------------------------
@@ -1265,6 +1270,23 @@ function parseWgDownPayload(command: HelperCommand): WgDownPayload {
   return { configFile: configFile.trim(), wgPath: wgPath as string | undefined }
 }
 
+function handleGetWgStats(socket: net.Socket): void {
+  try {
+    const output = execSync('wg show all transfer', { encoding: 'utf8', stdio: 'pipe' }).trim()
+    let rx = 0, tx = 0
+    for (const line of output.split('\n')) {
+      const parts = line.trim().split(/\s+/)
+      if (parts.length >= 3) {
+        rx += parseInt(parts[1]) || 0
+        tx += parseInt(parts[2]) || 0
+      }
+    }
+    sendResponse(socket, { status: 'ok', rx, tx })
+  } catch (err: unknown) {
+    // wg may not be installed or no active tunnel — return zeros, not an error
+    sendResponse(socket, { status: 'ok', rx: 0, tx: 0 })
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Command dispatcher
@@ -1305,7 +1327,7 @@ function processCommand(socket: net.Socket, command: HelperCommand): void {
       break
     }
 
-      case 'wg-up': {
+    case 'wg-up': {
       let payload: WgUpPayload
       try { payload = parseWgUpPayload(command) }
       catch (err: unknown) { sendResponse(socket, { status: 'error', error: (err as Error).message }); return }
@@ -1320,6 +1342,10 @@ function processCommand(socket: net.Socket, command: HelperCommand): void {
       handleWgDown(socket, payload)
       break
     }
+
+    case 'get-wg-stats':
+      handleGetWgStats(socket)
+    break
 
     default:
       log('WARN', `Unknown command: ${command.command}`)
