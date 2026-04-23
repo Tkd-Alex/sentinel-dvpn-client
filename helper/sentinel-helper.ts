@@ -79,6 +79,30 @@ const KS_RULE_NAMES  = [
 // Linux iptables kill switch chain name.
 const KS_CHAIN = 'SENTINEL_KS'
 
+/** macOS utun interface name. Fixed to avoid searching for a free slot. */
+const MAC_TUN_NAME   = 'utun10'
+
+/**
+ * Local (this end) and remote (peer/gateway) addresses for the macOS
+ * point-to-point utun interface. Routes use MAC_TUN_PEER as their gateway.
+ */
+const MAC_TUN_LOCAL  = '10.0.0.1'
+const MAC_TUN_PEER   = '10.0.0.2'
+
+/**
+ * Path to the temporary pf rules file written during kill switch enable.
+ * Loaded into pf memory only — never touches /etc/pf.conf.
+ */
+const MAC_PF_RULES_FILE = '/tmp/sentinel-ks.pf'
+
+
+/**
+ * Records whether pf was already enabled before Sentinel activated the kill
+ * switch. Used on teardown to decide whether to disable pf entirely (if we
+ * enabled it) or to restore the previous ruleset (if it was already running).
+ */
+let pfWasEnabledBefore = false
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -203,9 +227,10 @@ function runCmd(cmd: string): string {
 
 /**
  * Polls until the named network interface appears in the OS, or until the
- * timeout expires. Used on both platforms after spawning tun2socks.
- *
- * On Windows it queries the adapter via netsh. On Linux it checks /sys/class/net.
+ * timeout expires. Platform-specific check:
+ *   Windows: netsh interface show interface
+ *   Linux:   /sys/class/net/<name> directory exists
+ *   macOS:   ifconfig <name> exits 0
  *
  * @param ifName     Interface name to wait for.
  * @param timeoutMs  Maximum wait in milliseconds.
@@ -224,8 +249,11 @@ function waitForInterface(
       try {
         if (PLATFORM === 'win32') {
           execSync(`netsh interface show interface name="${ifName}"`, { stdio: 'pipe' })
-        } else {
+        } else if (PLATFORM === 'linux') {
           execSync(`test -d /sys/class/net/${ifName}`, { stdio: 'pipe' })
+        } else {
+          // macOS: ifconfig returns 0 if the interface exists, 1 if not.
+          execSync(`ifconfig ${ifName}`, { stdio: 'pipe' })
         }
         log('INFO', `Interface "${ifName}" is now available.`)
         resolve(true)
@@ -242,6 +270,42 @@ function waitForInterface(
 
     poll()
   })
+}
+
+/**
+ * Detects the default gateway on macOS by parsing `route -n get default`.
+ * The output contains a "gateway:" line with the IP address.
+ *
+ * @returns Gateway IP string, or null if not found.
+ */
+function detectGatewayMacOS(): string | null {
+  try {
+    const output = execSync('route -n get default', { encoding: 'utf8', stdio: 'pipe' })
+    // Relevant line:  "   gateway: 192.168.1.1"
+    const match = output.match(/gateway:\s+(\d+\.\d+\.\d+\.\d+)/)
+    return match ? match[1] : null
+  } catch (err) {
+    log('WARN', 'Failed to detect default gateway on macOS.', err)
+    return null
+  }
+}
+
+/**
+ * Removes routing entries added during start-transparent on macOS.
+ * BSD route syntax differs from Linux — uses `route delete` without `ip`.
+ * Errors are logged but do not throw.
+ *
+ * @param serverIp  V2Ray server IP whose host route must be deleted.
+ */
+function removeRoutesMacOS(serverIp: string): void {
+  for (const cmd of [
+    `route delete -host ${serverIp}`,
+    `route delete -net 0.0.0.0/1`,
+    `route delete -net 128.0.0.0/1`,
+  ]) {
+    try { runCmd(cmd) }
+    catch (err) { log('WARN', `macOS route removal failed (may be gone): ${cmd}`, err) }
+  }
 }
 
 /**
@@ -494,6 +558,98 @@ function disableKillSwitchLinux(): void {
 }
 
 // ---------------------------------------------------------------------------
+// macOS kill switch
+// ---------------------------------------------------------------------------
+
+
+/**
+ * Enables the macOS kill switch using pf (Packet Filter).
+ *
+ * Writes a complete pf ruleset to MAC_PF_RULES_FILE and loads it into
+ * memory with `pfctl -ef`. pf is NOT modified on disk — the rules exist
+ * only until the next `pfctl -d` or system reboot.
+ *
+ * Rules allow:
+ *   - Loopback (lo0) — Electron ↔ Helper IPC must not break
+ *   - Traffic to the V2Ray server IP — the proxy must be able to connect
+ *   - All traffic leaving via the TUN interface — tunnelled user data
+ *   - DHCP (UDP 67/68) — physical NIC must renew its IP lease
+ *
+ * Everything else is blocked (drop policy).
+ *
+ * @param serverIp  IPv4 address of the V2Ray server to exempt.
+ * @param tunName   utun interface name to exempt.
+ * @throws          Error if pfctl fails.
+ */
+function enableKillSwitchMacOS(serverIp: string, tunName: string): void {
+  if (killSwitchActive) {
+    log('WARN', 'macOS kill switch already active — skipping.')
+    return
+  }
+
+  // Record whether pf was enabled before we touched it.
+  try {
+    const info = execSync('pfctl -s info 2>/dev/null', { encoding: 'utf8', stdio: 'pipe' })
+    pfWasEnabledBefore = info.includes('Status: Enabled')
+  } catch {
+    pfWasEnabledBefore = false
+  }
+
+  log('INFO', `Enabling macOS kill switch. pf was enabled: ${pfWasEnabledBefore}. Server: ${serverIp}`)
+
+  const rules = [
+    '# Sentinel kill switch — loaded by sentinel-helper, NOT saved to disk',
+    'set block-policy drop',
+    'set skip on lo0',
+    'block out all',
+    `pass out to ${serverIp}`,          // V2Ray server
+    `pass out on ${tunName}`,           // TUN interface (tunnelled traffic)
+    'pass out proto { tcp, udp } from any to any port { 67, 68 }', // DHCP
+  ].join('\n')
+
+  // Write to temp file — pfctl requires a file path, not stdin for -e.
+  require('fs').writeFileSync(MAC_PF_RULES_FILE, rules, { encoding: 'utf8' })
+
+  // -e enables pf, -f loads the rules file. Combined: pfctl -ef <file>.
+  runCmd(`pfctl -ef ${MAC_PF_RULES_FILE}`)
+
+  killSwitchActive = true
+  log('INFO', 'macOS kill switch enabled.')
+}
+
+/**
+ * Disables the macOS kill switch. Restores pf to its previous state:
+ *   - If pf was enabled before Sentinel touched it: reload /etc/pf.conf
+ *     (restores the original Apple-managed ruleset).
+ *   - If pf was disabled before: disable it again with `pfctl -d`.
+ *
+ * Also removes the temporary rules file.
+ */
+function disableKillSwitchMacOS(): void {
+  log('INFO', `Disabling macOS kill switch. Restoring pf state: was-enabled=${pfWasEnabledBefore}`)
+
+  try {
+    if (pfWasEnabledBefore) {
+      // Restore original rules — flushes our kill switch rules.
+      runCmd('pfctl -f /etc/pf.conf')
+    } else {
+      // pf was not running before us — disable it entirely.
+      runCmd('pfctl -d')
+    }
+  } catch (err) {
+    log('ERROR', 'Failed to restore pf state.', err)
+  }
+
+  // Clean up temp file.
+  try { require('fs').unlinkSync(MAC_PF_RULES_FILE) } catch { /* may not exist */ }
+
+  killSwitchActive = false
+  pfWasEnabledBefore = false
+  log('INFO', 'macOS kill switch disabled.')
+}
+
+
+// ---------------------------------------------------------------------------
 // Platform-agnostic kill switch dispatch
 // ---------------------------------------------------------------------------
 
@@ -506,6 +662,7 @@ function disableKillSwitchLinux(): void {
  */
 function enableKillSwitch(serverIp: string, tunName: string): void {
   if (PLATFORM === 'win32') enableKillSwitchWindows(serverIp)
+  else if (PLATFORM === 'darwin') enableKillSwitchMacOS(serverIp, tunName)
   else if (PLATFORM === 'linux') enableKillSwitchLinux(serverIp, tunName)
   else log('WARN', `Kill switch not implemented for platform: ${PLATFORM}`)
 }
@@ -515,6 +672,7 @@ function enableKillSwitch(serverIp: string, tunName: string): void {
  */
 function disableKillSwitch(): void {
   if (PLATFORM === 'win32') disableKillSwitchWindows()
+  else if (PLATFORM === 'darwin') disableKillSwitchMacOS()
   else if (PLATFORM === 'linux') disableKillSwitchLinux()
   else log('WARN', `Kill switch teardown not implemented for platform: ${PLATFORM}`)
 }
@@ -728,6 +886,111 @@ function stopTransparentLinux(socket: net.Socket): void {
 }
 
 // ---------------------------------------------------------------------------
+// Platform handlers — macOS
+// ---------------------------------------------------------------------------
+
+/**
+ * macOS implementation of start-transparent. Brings up transparent proxying:
+ *
+ *   1. Detect the default gateway via `route -n get default`.
+ *   2. Spawn tun2socks with `-device utun10`. On macOS tun2socks creates the
+ *      utun interface itself — no `ip tuntap` step needed (unlike Linux).
+ *   3. Wait for utun10 to appear (ifconfig returns 0).
+ *   4. Configure the point-to-point address with ifconfig.
+ *   5. Add host route for V2Ray server via the real gateway.
+ *   6. Add 0/1 and 128/1 routes via MAC_TUN_PEER (the utun peer address).
+ *   7. Enable kill switch if requested.
+ *
+ * @param socket   Connected client socket for the response.
+ * @param payload  Validated StartTransparentPayload.
+ */
+async function startTransparentMacOS(
+  socket:  net.Socket,
+  payload: StartTransparentPayload,
+): Promise<void> {
+  const { tun2socksPath, socksPort, serverIp, killSwitch = false } = payload
+  const tunName = MAC_TUN_NAME
+  let bypassRouteAdded = false
+
+  try {
+    const gateway = detectGatewayMacOS()
+    if (!gateway) throw new Error('Could not detect the default gateway on macOS.')
+    log('INFO', `Gateway: ${gateway}`)
+
+    // Spawn tun2socks — it creates utun10 automatically on macOS.
+    // stdio:'ignore' is critical for the same reason as Windows and Linux:
+    // no inherited handles means no hanging await in Electron.
+    const args = [
+      '-device', tunName,
+      '-proxy',  `socks5://127.0.0.1:${socksPort}`,
+    ]
+    log('INFO', `Spawning tun2socks: ${tun2socksPath} ${args.join(' ')}`)
+
+    const child = spawn(tun2socksPath, args, { stdio: 'ignore', detached: false })
+
+    await new Promise<void>((resolve, reject) => {
+      const w = setTimeout(resolve, 400)
+      child.once('error', (e) => { clearTimeout(w); reject(new Error(`tun2socks failed: ${e.message}`)) })
+      child.once('exit',  (c) => { clearTimeout(w); reject(new Error(`tun2socks exited immediately (code ${c ?? '?'}).`)) })
+    })
+
+    activeTun2Socks = child
+    log('INFO', `tun2socks PID ${child.pid}`)
+    child.on('exit', (code, sig) => { log('WARN', 'tun2socks exited.', { code, sig }); activeTun2Socks = null })
+
+    // Wait for utun10 to appear before configuring it.
+    const ready = await waitForInterface(tunName)
+    if (!ready) throw new Error(`utun interface "${tunName}" did not appear. Check tun2socks binary.`)
+
+    // Configure point-to-point address. macOS utun is P2P: local <-> peer.
+    runCmd(`ifconfig ${tunName} ${MAC_TUN_LOCAL} ${MAC_TUN_PEER} up`)
+    log('INFO', `${tunName} configured: ${MAC_TUN_LOCAL} <-> ${MAC_TUN_PEER}`)
+
+    // Bypass route for V2Ray server — must exist before the 0/1 routes.
+    runCmd(`route add -host ${serverIp} ${gateway}`)
+    bypassRouteAdded = true
+
+    // Two /1 routes via the TUN peer address cover the full IPv4 space.
+    // macOS route syntax uses the peer address as the gateway for utun.
+    runCmd(`route add -net 0.0.0.0/1 ${MAC_TUN_PEER}`)
+    runCmd(`route add -net 128.0.0.0/1 ${MAC_TUN_PEER}`)
+    log('INFO', 'Default routes via TUN added. Transparent mode active.')
+
+    activeServerIp = serverIp
+    if (killSwitch) enableKillSwitch(serverIp, tunName)
+
+    sendResponse(socket, { status: 'ok', pid: child.pid })
+
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err)
+    log('ERROR', 'macOS start-transparent failed. Rolling back.', { message })
+    if (killSwitchActive) disableKillSwitch()
+    if (activeTun2Socks) { try { activeTun2Socks.kill() } catch { /* best effort */ }; activeTun2Socks = null }
+    if (bypassRouteAdded) removeRoutesMacOS(serverIp)
+    activeServerIp = null
+    sendResponse(socket, { status: 'error', error: message })
+  }
+}
+
+/**
+ * macOS implementation of stop-transparent.
+ * Disables kill switch → kills tun2socks (destroys utun) → removes routes.
+ *
+ * @param socket  Connected client socket.
+ */
+function stopTransparentMacOS(socket: net.Socket): void {
+  if (killSwitchActive) disableKillSwitch()
+
+  if (activeTun2Socks) {
+    try { activeTun2Socks.kill(); log('INFO', `tun2socks (PID ${activeTun2Socks.pid}) killed.`) }
+    catch (err) { log('WARN', 'Failed to kill tun2socks.', err) }
+    activeTun2Socks = null
+  }
+
+  if (activeServerIp) { removeRoutesMacOS(activeServerIp); activeServerIp = null }
+}
+
+// ---------------------------------------------------------------------------
 // Command handlers (platform-agnostic entry points)
 // ---------------------------------------------------------------------------
 
@@ -753,8 +1016,9 @@ async function handleStartTransparent(
     return
   }
 
-  if (PLATFORM === 'win32')        await startTransparentWindows(socket, payload)
-  else if (PLATFORM === 'linux')   await startTransparentLinux(socket, payload)
+  if (PLATFORM === 'win32') await startTransparentWindows(socket, payload)
+  else if (PLATFORM === 'linux') await startTransparentLinux(socket, payload)
+  else if (PLATFORM === 'darwin') await startTransparentMacOS(socket, payload)
   else sendResponse(socket, { status: 'error', error: `start-transparent not implemented for platform: ${PLATFORM}` })
 }
 
@@ -773,8 +1037,9 @@ function handleStopTransparent(socket: net.Socket): void {
 
   log('INFO', 'Stopping transparent mode.')
 
-  if (PLATFORM === 'win32')       stopTransparentWindows(socket)
-  else if (PLATFORM === 'linux')  stopTransparentLinux(socket)
+  if (PLATFORM === 'win32') stopTransparentWindows(socket)
+  else if (PLATFORM === 'linux') stopTransparentLinux(socket)
+  else if (PLATFORM === 'darwin') stopTransparentMacOS(socket)
   else { sendResponse(socket, { status: 'error', error: `stop-transparent not implemented for: ${PLATFORM}` }); return }
 
   log('INFO', 'Transparent mode stopped.')
@@ -1165,6 +1430,7 @@ function shutdown(server: net.Server, reason: string): void {
   if (activeServerIp) {
     if (PLATFORM === 'win32') removeRoutesWindows(activeServerIp)
     else if (PLATFORM === 'linux') removeRoutesLinux(activeServerIp, LIN_TUN_NAME)
+    else if (PLATFORM === 'darwin') removeRoutesMacOS(activeServerIp)
     activeServerIp = null
   }
 
