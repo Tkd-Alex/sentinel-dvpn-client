@@ -18,7 +18,8 @@
     "dev:helper": "ts-node --project helper/tsconfig.json helper/sentinel-helper.ts",
     "build:helper:win": "tsc --project helper/tsconfig.json && pkg dist-helper/sentinel-helper.js --target node18-win-x64 --output dist-helper/sentinel-helper.exe",
     "build:helper:linux": "tsc --project helper/tsconfig.json && pkg dist-helper/sentinel-helper.js --target node18-linux-x64 --output dist-helper/sentinel-helper",
-    "build:helper:mac": "tsc --project helper/tsconfig.json && pkg dist-helper/sentinel-helper.js --target node18-macos-x64 --output dist-helper/sentinel-helper-mac"
+    "build:helper:mac": "tsc --project helper/tsconfig.json && pkg dist-helper/sentinel-helper.js --target node18-macos-x64 --output dist-helper/sentinel-helper-mac",
+    "build:helper:mac:universal": "tsc --project helper/tsconfig.json && pkg dist-helper/sentinel-helper.js --target node18-macos-x64 --output dist-helper/sentinel-helper-mac-x64 && pkg dist-helper/sentinel-helper.js --target node18-macos-arm64 --output dist-helper/sentinel-helper-mac-arm64 && lipo -create -output dist-helper/sentinel-helper-mac dist-helper/sentinel-helper-mac-x64 dist-helper/sentinel-helper-mac-arm64"
   },
   "dependencies": {
     "@cosmjs/proto-signing": "^0.32.4",
