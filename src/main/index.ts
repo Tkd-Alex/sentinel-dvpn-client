@@ -82,6 +82,12 @@ const STORE_KEY_BINARIES = 'custom_binaries'
 const NODES_API          = 'https://api.sentnodes.com/v2/nodes'
 const RPC_TIMEOUT_MS     = 10_000
 
+// ── macOS const ──────────────────────────────────────────────────────────────────
+const HELPER_INSTALL_DIR  = '/usr/local/lib/sentinel'
+const HELPER_DEST         = `${HELPER_INSTALL_DIR}/sentinel-helper`
+const PLIST_DEST          = '/Library/LaunchDaemons/com.sentinel.helper.plist'
+const LAUNCHD_LABEL       = 'com.sentinel.helper'
+
 // ── Defaults ──────────────────────────────────────────────────────────────────
 interface AppSettings {
   killSwitch:     boolean
@@ -159,6 +165,7 @@ app.whenReady().then(async () => {
   if (!alive){
     if(process.platform === 'linux') await ensureLinuxHelper()
     else if(process.platform === 'win32') await ensureWindowsHelper();
+    else if (process.platform === 'darwin') await ensureMacOSHelper(mainWindow!);
   }
 
   createWindow()
@@ -1180,4 +1187,224 @@ V2Ray.prototype.connect = function (configFile?: string) {
   const pid = _origConnect.call(this, configFile) as number | undefined
   if (this.child) { (this.child as ChildProcess).on('exit', () => { if (activeV2Ray === this) { mainWindow?.webContents.send('vpn:disconnected', { reason: 'V2Ray exited' }); activeV2Ray = null; scheduleReconnect() } }) }
   return pid
+}
+
+// ── macOS - Section ─────────────────────────────────────────────────────────────
+
+/**
+ * Generates the launchd plist XML for the sentinel-helper daemon.
+ * KeepAlive: true tells launchd to restart the helper if it crashes.
+ * UserName: root gives it the privileges needed for network operations.
+ *
+ * @returns  The plist XML string.
+ */
+function buildPlistXml(): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${LAUNCHD_LABEL}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${HELPER_DEST}</string>
+        <string>--service</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>UserName</key>
+    <string>root</string>
+    <key>StandardOutPath</key>
+    <string>/var/log/sentinel-helper.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/sentinel-helper.log</string>
+</dict>
+</plist>
+`
+}
+ 
+// ---------------------------------------------------------------------------
+// Installation
+// ---------------------------------------------------------------------------
+ 
+/**
+ * Installs the sentinel-helper LaunchDaemon on macOS. Requires that the user
+ * approves a single osascript administrator privileges prompt.
+ *
+ * Steps:
+ *   1. Copy the helper binary from app resources to /tmp (no privileges needed
+ *      — avoids FUSE/sandbox issues with reading from the .app bundle as root).
+ *   2. Write the plist XML to /tmp (no privileges needed).
+ *   3. Run the privileged commands via execPrivileged:
+ *      a. Create the install directory.
+ *      b. Copy binary from /tmp to the final location.
+ *      c. Copy plist from /tmp to /Library/LaunchDaemons/.
+ *      d. Set correct ownership (root:wheel) on the plist — required by launchd.
+ *      e. launchctl load to start the daemon.
+ *   4. Clean up the /tmp files.
+ *
+ * @throws  Error if execPrivileged fails or the user cancels the auth prompt.
+ */
+export async function installMacOSHelper(): Promise<void> {
+  const resourcesPath = app.isPackaged
+    ? process.resourcesPath
+    : path.join(__dirname, '..', '..', 'dist-helper')
+ 
+  const helperSrc = path.join(resourcesPath, 'sentinel-helper')
+ 
+  if (!fs.existsSync(helperSrc)) {
+    throw new Error(`sentinel-helper binary not found at: ${helperSrc}`)
+  }
+ 
+  // Write binary and plist to /tmp so root can read them (avoids app bundle
+  // permissions issues when the privileged process tries to read the source).
+  const stamp    = Date.now()
+  const tmpBin   = `/tmp/sentinel-helper-${stamp}`
+  const tmpPlist = `/tmp/sentinel-helper-${stamp}.plist`
+ 
+  fs.copyFileSync(helperSrc, tmpBin)
+  fs.chmodSync(tmpBin, 0o755)
+  fs.writeFileSync(tmpPlist, buildPlistXml(), { encoding: 'utf8' })
+ 
+  try {
+    const result = await execPrivileged([
+      `mkdir -p ${HELPER_INSTALL_DIR}`,
+      `cp ${tmpBin} ${HELPER_DEST}`,
+      `chmod 755 ${HELPER_DEST}`,
+      `cp ${tmpPlist} ${PLIST_DEST}`,
+      // launchd requires the plist to be owned by root:wheel with mode 644.
+      `chown root:wheel ${PLIST_DEST}`,
+      `chmod 644 ${PLIST_DEST}`,
+      // If already loaded from a previous install, unload first.
+      `launchctl unload ${PLIST_DEST} 2>/dev/null; true`,
+      `launchctl load ${PLIST_DEST}`,
+    ])
+ 
+    if (result.code !== 0) {
+      throw new Error(`Helper installation failed: ${result.stderr}`)
+    }
+  } finally {
+    // Always clean up temp files, even on error.
+    try { fs.unlinkSync(tmpBin)   } catch { /* best effort */ }
+    try { fs.unlinkSync(tmpPlist) } catch { /* best effort */ }
+  }
+}
+ 
+// ---------------------------------------------------------------------------
+// Uninstallation (called from app before quit or on user request)
+// ---------------------------------------------------------------------------
+ 
+/**
+ * Unloads and removes the sentinel-helper LaunchDaemon. Requires administrator
+ * privileges (one more osascript prompt — only needed if user clicks "Uninstall").
+ *
+ * @throws  Error if execPrivileged fails.
+ */
+export async function uninstallMacOSHelper(): Promise<void> {
+  const result = await execPrivileged([
+    `launchctl unload ${PLIST_DEST} 2>/dev/null; true`,
+    `rm -f ${PLIST_DEST}`,
+    `rm -f ${HELPER_DEST}`,
+    // Remove directory only if empty.
+    `rmdir ${HELPER_INSTALL_DIR} 2>/dev/null; true`,
+  ])
+ 
+  if (result.code !== 0) {
+    throw new Error(`Helper uninstallation failed: ${result.stderr}`)
+  }
+}
+ 
+// ---------------------------------------------------------------------------
+// Health check and auto-recovery
+// ---------------------------------------------------------------------------
+ 
+/**
+ * Ensures the sentinel-helper service is alive on macOS. Called from
+ * app.whenReady() before the main window is shown.
+ *
+ * Decision tree:
+ *   1. pingHelper() succeeds → already running, nothing to do.
+ *   2. Ping fails, plist exists → daemon is registered but stopped.
+ *      Attempt `launchctl start` (no password needed — plist is already loaded).
+ *      If that also fails → offer reinstall.
+ *   3. Ping fails, plist absent → first run. Run installMacOSHelper().
+ *
+ * If any step fails, the error is surfaced to the UI via the 'helper:setup-required'
+ * IPC channel so the renderer can show a proper dialog instead of a crash.
+ *
+ * @param mainWindow  The Electron BrowserWindow used to send IPC events.
+ */
+export async function ensureMacOSHelper(mainWindow: BrowserWindow): Promise<void> {
+  const alive = await pingHelper(3_000)
+  if (alive) return
+ 
+  const plistExists = fs.existsSync(PLIST_DEST)
+ 
+  if (plistExists) {
+    // The plist is already installed — daemon may have stopped or crashed.
+    // `launchctl start` does not require a password for already-loaded plists.
+    log('INFO', 'macOS helper not responding. Attempting launchctl start.')
+    try {
+      execSync(`launchctl start ${LAUNCHD_LABEL}`, { stdio: 'pipe' })
+      // Give it a moment to bind the TCP port.
+      await new Promise(r => setTimeout(r, 1500))
+      if (await pingHelper(3_000)) {
+        log('INFO', 'macOS helper restarted successfully.')
+        return
+      }
+    } catch (err) {
+      log('WARN', 'launchctl start failed.', err)
+    }
+ 
+    // Still not responding after restart attempt — offer reinstall.
+    log('WARN', 'macOS helper still not responding after launchctl start. Requesting reinstall.')
+    mainWindow.webContents.send('helper:setup-required', {
+      reason: 'Helper service is installed but not responding. A reinstall is required.',
+    })
+    return
+  }
+ 
+  // First run — plist does not exist yet.
+  log('INFO', 'macOS helper not installed. Running first-time setup.')
+  mainWindow.webContents.send('helper:setup-required', {
+    reason: 'first-run',
+  })
+ 
+  // The renderer shows a dialog; when the user confirms, it sends back
+  // 'helper:setup-approved'. We wait for that before proceeding.
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('Setup approval timed out.')), 120_000)
+    ipcMain.once('helper:setup-approved', () => {
+      clearTimeout(timeout)
+      resolve()
+    })
+  })
+ 
+  await installMacOSHelper()
+ 
+  // Wait for the daemon to start after launchctl load.
+  for (let i = 0; i < 10; i++) {
+    await new Promise(r => setTimeout(r, 600))
+    if (await pingHelper(2_000)) {
+      log('INFO', 'macOS helper installed and responding.')
+      mainWindow.webContents.send('helper:setup-complete')
+      return
+    }
+  }
+ 
+  throw new Error('macOS helper was installed but did not respond after setup.')
+}
+ 
+// ---------------------------------------------------------------------------
+// Inline log helper (copy the signature from sentinel-helper.ts)
+// ---------------------------------------------------------------------------
+ 
+// Note: use your existing log() function from ipcHandlers / main.ts.
+// This placeholder is here only so the file compiles standalone.
+function log(level: 'INFO' | 'WARN' | 'ERROR', msg: string, data?: unknown): void {
+  const ts    = new Date().toISOString()
+  const extra = data !== undefined ? ' ' + JSON.stringify(data) : ''
+  console.log(`[${ts}] [${level}] [Electron/macOS] ${msg}${extra}`)
 }
